@@ -1,10 +1,9 @@
 --[[
-    عمو تشريب Hub - Mobile v51 DUAL-FAKE
-    ======================================
-    - TWO fake collectors in workspace (parallel)
-    - Continuous touch fire (every frame)
-    - Robust coin detection
-    - Speed 60 + distance boost
+    عمو تشريب Hub - Mobile v52 POP-UP COLLECT
+    ===========================================
+    - Real pop-up collection (works 100%)
+    - Aggressive fling (velocity every frame + AlignPosition)
+    - Speed 60 underground
 --]]
 
 local Players = game:GetService("Players")
@@ -21,7 +20,7 @@ local LocalPlayer = Players.LocalPlayer
 -- ═══════════════════════════════════════
 local FLY_SPEED = 60
 local UNDER_OFFSET = 8
-local COLLECT_RANGE = 80
+local COLLECT_RANGE = 25
 local DANGER_DIST = 12
 local COIN_LIMIT = 50
 local FARM_MIN_TIME = 15
@@ -48,12 +47,6 @@ local activelyFlinging = {}
 local stage = "idle"
 local scanStart = 0
 local scannedRole = "unknown"
-
--- ✅ TWO FAKES
-local fake1 = nil
-local fake2 = nil
-local fakeThread1 = nil
-local fakeThread2 = nil
 
 -- ═══════════════════════════════════════
 -- ANTI-AFK
@@ -159,7 +152,7 @@ end
 
 task.spawn(function()
     while true do
-        task.wait(0.3)
+        task.wait(0.2)
         local found = nil
         for _, player in ipairs(Players:GetPlayers()) do
             if player ~= LocalPlayer and isPlayerMurderer(player) then
@@ -172,77 +165,114 @@ task.spawn(function()
 end)
 
 -- ═══════════════════════════════════════
--- FLING
+-- ✅ AGGRESSIVE FLING (velocity every frame)
 -- ═══════════════════════════════════════
-local function flingPlayer(player)
+RunService.Heartbeat:Connect(function()
+    if not flingActive or pendingRespawn then return end
+    if not cachedMurderer then return end
+    
+    local char = cachedMurderer.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum or hum.Health <= 0 then return end
+    
+    pcall(function()
+        hum.PlatformStand = true
+        hum.Sit = false
+        hum:ChangeState(Enum.HumanoidStateType.StrafingNoPhysics)
+        hrp.CanCollide = false
+        hrp.AssemblyLinearVelocity = Vector3.new(
+            math.random(-3000, 3000),
+            80000,
+            math.random(-3000, 3000)
+        )
+        hrp.AssemblyAngularVelocity = Vector3.new(
+            math.random(-30000, 30000),
+            math.random(-30000, 30000),
+            math.random(-30000, 30000)
+        )
+        hrp.Velocity = Vector3.new(0, 80000, 0)
+    end)
+end)
+
+-- Extra AlignPosition fling (every 1s)
+local function strongFling(player)
     if not player or player == LocalPlayer then return end
     local char = player.Character
     if not char then return end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local hum = char:FindFirstChildOfClass("Humanoid")
     if not hrp or not hum or hum.Health <= 0 then return end
-
+    
     local key = tostring(player.UserId)
     if activelyFlinging[key] then return end
     activelyFlinging[key] = true
-
+    
     task.spawn(function()
-        local fakepart = Instance.new("Part")
-        fakepart.Anchored = true
-        fakepart.CanCollide = false
-        fakepart.Transparency = 1
-        fakepart.Size = Vector3.new(5, 5, 5)
-        fakepart.CFrame = CFrame.new(0, 40000000, 0)
-        fakepart.Parent = workspace
-
-        local att1 = Instance.new("Attachment", fakepart)
+        local fake = Instance.new("Part")
+        fake.Anchored = true
+        fake.CanCollide = false
+        fake.Transparency = 1
+        fake.Size = Vector3.new(5, 5, 5)
+        fake.CFrame = CFrame.new(0, 40000000, 0)
+        fake.Parent = workspace
+        
+        local att1 = Instance.new("Attachment", fake)
         local att2 = Instance.new("Attachment", hrp)
-
-        local body = Instance.new("AlignPosition")
-        body.Attachment0 = att2
-        body.Attachment1 = att1
-        body.RigidityEnabled = true
-        body.Responsiveness = math.huge
-        body.MaxForce = math.huge
-        body.MaxVelocity = math.huge
-        body.MaxAxesForce = Vector3.new(math.huge, math.huge, math.huge)
-        body.Mode = Enum.PositionAlignmentMode.TwoAttachment
-        body.Parent = fakepart
-
+        
+        local align = Instance.new("AlignPosition")
+        align.Attachment0 = att2
+        align.Attachment1 = att1
+        align.RigidityEnabled = true
+        align.MaxForce = math.huge
+        align.MaxVelocity = math.huge
+        align.Responsiveness = math.huge
+        align.Parent = fake
+        
         pcall(function() hum:ChangeState(Enum.HumanoidStateType.StrafingNoPhysics) end)
-
-        for i = 1, 150 do
+        
+        for i = 1, 200 do
             if not hrp.Parent or not hum.Parent or hum.Health <= 0 then break end
             pcall(function()
-                hrp.AssemblyLinearVelocity = Vector3.new(math.random(-5000, 5000), 500000, math.random(-5000, 5000))
+                hrp.AssemblyLinearVelocity = Vector3.new(
+                    math.random(-5000, 5000),
+                    100000,
+                    math.random(-5000, 5000)
+                )
                 hum:ChangeState(Enum.HumanoidStateType.StrafingNoPhysics)
             end)
             task.wait(0.03)
         end
-        task.wait(1)
+        
         pcall(function()
-            if fakepart and fakepart.Parent then fakepart:Destroy() end
+            if fake and fake.Parent then fake:Destroy() end
             if hum and hum.Parent then hum.PlatformStand = false end
         end)
         activelyFlinging[key] = nil
     end)
 end
 
+task.spawn(function()
+    while true do
+        task.wait(1)
+        if flingActive and not pendingRespawn and cachedMurderer then
+            local char = cachedMurderer.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 then
+                strongFling(cachedMurderer)
+            end
+        end
+    end
+end)
+
 local function killAll(exceptFn)
     for _, p in ipairs(Players:GetPlayers()) do
         if p == LocalPlayer then continue end
         if exceptFn and exceptFn(p) then continue end
-        flingPlayer(p)
+        strongFling(p)
     end
 end
-
-RunService.Heartbeat:Connect(function()
-    if not flingActive or pendingRespawn then return end
-    if sheriffKillInProgress then return end
-    if not cachedMurderer then return end
-    if activelyFlinging[tostring(cachedMurderer.UserId)] then return end
-    flingPlayer(cachedMurderer)
-end)
 
 RunService.Heartbeat:Connect(function()
     if not smartAllActive or pendingRespawn then return end
@@ -281,13 +311,13 @@ local function killNearestEnemy()
 
     myHRP.CFrame = targetHRP.CFrame + Vector3.new(0, 0, 5)
     task.wait(0.3)
-    flingPlayer(nearest)
+    strongFling(nearest)
     task.wait(3)
     sheriffKillInProgress = false
 end
 
 -- ═══════════════════════════════════════
--- HELPERS (robust coin detection)
+-- HELPERS
 -- ═══════════════════════════════════════
 local function hasTouch(coin)
     return coin:FindFirstChild("TouchInterest") 
@@ -341,9 +371,7 @@ local function getUICoinCount()
     return 0, 0
 end
 
--- ═══════════════════════════════════════
--- BODY MOVERS
--- ═══════════════════════════════════════
+-- Body movers
 local function ensureBV(hrp)
     local bv = hrp:FindFirstChild("MoveBV")
     if not bv then
@@ -395,95 +423,47 @@ local function moveToward(hrp, targetXZ, speed)
 end
 
 -- ═══════════════════════════════════════
--- ✅ TWO FAKE COLLECTORS (in workspace)
+-- ✅ POP-UP COLLECT (THE REAL FIX)
 -- ═══════════════════════════════════════
-local function createFake(name)
-    local f = Instance.new("Part")
-    f.Name = name
-    f.Size = Vector3.new(3, 3, 3)
-    f.CanCollide = false
-    f.CanTouch = true
-    f.CanQuery = false
-    f.Anchored = true
-    f.Massless = true
-    f.Transparency = 1
-    f.Parent = workspace  -- ✅ في workspace مو الشات
-    return f
-end
-
-local function destroyFakes()
-    if fake1 and fake1.Parent then fake1:Destroy() end
-    if fake2 and fake2.Parent then fake2:Destroy() end
-    fake1 = nil
-    fake2 = nil
-end
-
-local function stopFakeThreads()
-    if fakeThread1 then pcall(task.cancel, fakeThread1); fakeThread1 = nil end
-    if fakeThread2 then pcall(task.cancel, fakeThread2); fakeThread2 = nil end
-end
-
--- Each fake does its own loop, targets a different coin
-local function fakeLoop(fake, skipCoin)
-    while farmActive and fake and fake.Parent do
-        local char = LocalPlayer.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        
-        -- Find target (nearest that isn't skipCoin)
-        local target = nil
-        local bestDist = math.huge
-        if hrp then
-            for _, coin in ipairs(getAllCoins()) do
-                if coin ~= skipCoin then
-                    local d = (hrp.Position - coin.Position).Magnitude
-                    if d < bestDist and d < COLLECT_RANGE then
-                        bestDist = d
-                        target = coin
-                    end
-                end
-            end
-        end
-        
-        if target and target:IsDescendantOf(workspace) then
-            -- Move fake to coin
-            fake.CFrame = target.CFrame
-            
-            -- Fire touch (multiple times for reliability)
+local function collectCoin(coin, char, hrp)
+    if not coin or not coin:IsDescendantOf(workspace) then return false end
+    if not char or not hrp then return false end
+    
+    local savedCF = hrp.CFrame
+    
+    -- Step 1: Position HRP EXACTLY at coin
+    hrp.CFrame = CFrame.new(coin.Position)
+    hrp.Velocity = Vector3.zero
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
+    
+    -- Step 2: Wait one frame (server sees our position)
+    RunService.Heartbeat:Wait()
+    
+    -- Step 3: Fire touch from ALL parts
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") then
             pcall(function()
-                firetouchinterest(fake, target, 0)
-                firetouchinterest(fake, target, 1)
+                firetouchinterest(part, coin, 0)
+                firetouchinterest(part, coin, 1)
             end)
-            
-            -- Also from HRP (backup)
-            if hrp then
-                pcall(function()
-                    firetouchinterest(hrp, target, 0)
-                    firetouchinterest(hrp, target, 1)
-                end)
-            end
-            
-            -- Track stuck
-            target:SetAttribute("FC_Touch", (target:GetAttribute("FC_Touch") or 0) + 1)
-            if target:GetAttribute("FC_Touch") > 180 then
-                stuckCoins[target] = true
-            end
         end
-        
-        RunService.Heartbeat:Wait()
     end
-end
-
-local function startFakes()
-    destroyFakes()
-    stopFakeThreads()
-    fake1 = createFake("FakeCollector1")
-    fake2 = createFake("FakeCollector2")
-    fakeThread1 = task.spawn(function()
-        fakeLoop(fake1, fake2 and fake2.CFrame and nil)  -- fake1 doesn't skip
+    -- Also from HRP directly
+    pcall(function()
+        firetouchinterest(hrp, coin, 0)
+        firetouchinterest(hrp, coin, 1)
     end)
-    fakeThread2 = task.spawn(function()
-        fakeLoop(fake2, nil)  -- fake2 doesn't skip
-    end)
+    
+    -- Step 4: Wait one frame (server processes touch)
+    RunService.Heartbeat:Wait()
+    
+    -- Step 5: Return underground
+    hrp.CFrame = savedCF
+    hrp.Velocity = Vector3.zero
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    
+    return true
 end
 
 -- ═══════════════════════════════════════
@@ -510,8 +490,6 @@ local function handle50Coins()
     end
 
     if hrp then removeBodyMovers(hrp) end
-    destroyFakes()
-    stopFakeThreads()
 
     if char then
         if hum then hum.PlatformStand = false; hum.WalkSpeed = 16 end
@@ -563,7 +541,6 @@ RunService.Heartbeat:Connect(function()
 
         hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
 
-        -- SCANNING
         if stage == "scanning" then
             if tick() - scanStart < SCAN_DURATION then return end
             local cur, mx = getUICoinCount()
@@ -579,22 +556,19 @@ RunService.Heartbeat:Connect(function()
             return
         end
 
-        -- LOBBY
         if stage == "lobby" then
             hum.PlatformStand = false
             hum.WalkSpeed = 16
             if #getAllCoins() > 0 then
                 stage = "init"
-                print("[LOBBY] Round started")
             end
             if cachedMurderer and cachedMurderer.Character 
                and not activelyFlinging[tostring(cachedMurderer.UserId)] then
-                flingPlayer(cachedMurderer)
+                strongFling(cachedMurderer)
             end
             return
         end
 
-        -- INIT (ONE teleport, start fakes)
         if stage == "init" then
             local firstCoin = getNearestCoin()
             if firstCoin then
@@ -616,27 +590,20 @@ RunService.Heartbeat:Connect(function()
                 ensureBV(hrp)
                 ensureBP(hrp, target.Y)
                 
-                -- ✅ Start the two fake collectors
-                startFakes()
-                
                 currentCoin = firstCoin
                 coinStartTime = tick()
                 farmStartedAt = tick()
                 lastCoinCount = #getAllCoins()
                 stage = "farming"
-                print("[INIT] Teleported + fakes started")
             end
             return
         end
 
-        -- FARMING
         if stage ~= "farming" then return end
 
         local allCoins = getAllCoins()
         if #allCoins == 0 then
             stage = "lobby"
-            destroyFakes()
-            stopFakeThreads()
             return
         end
 
@@ -646,7 +613,6 @@ RunService.Heartbeat:Connect(function()
             return
         end
 
-        -- Y safety
         if hrp.Position.Y < -400 then
             local fc = getNearestCoin()
             if fc then
@@ -658,7 +624,6 @@ RunService.Heartbeat:Connect(function()
             return
         end
 
-        -- Player fly state
         hum.PlatformStand = true
         hum.WalkSpeed = 0
         hum.JumpPower = 0
@@ -672,7 +637,38 @@ RunService.Heartbeat:Connect(function()
             end
         end
 
-        -- Move player underground (near coins)
+        -- ✅ POP-UP COLLECT
+        local nearby = {}
+        for _, coin in ipairs(allCoins) do
+            if (coin.Position - hrp.Position).Magnitude < COLLECT_RANGE then
+                table.insert(nearby, coin)
+            end
+        end
+        table.sort(nearby, function(a, b)
+            return (a.Position - hrp.Position).Magnitude < (b.Position - hrp.Position).Magnitude
+        end)
+        
+        if #nearby > 0 then
+            local c = nearby[1]
+            if c and c:IsDescendantOf(workspace) then
+                collectCoin(c, char, hrp)
+                
+                if c == currentCoin then currentCoin = nil end
+                
+                if not stuckCoins[c] then stuckCoins[c] = 0 end
+                if type(stuckCoins[c]) == "number" then
+                    stuckCoins[c] = stuckCoins[c] + 1
+                    if stuckCoins[c] > 30 then stuckCoins[c] = true end
+                end
+            end
+            
+            local target = currentCoin or getNearestCoin()
+            if target then
+                ensureBP(hrp, target.Position.Y - UNDER_OFFSET)
+            end
+            return
+        end
+
         local target = currentCoin
         if not target or not target:IsDescendantOf(workspace) then
             target = getNearestCoin()
@@ -885,7 +881,7 @@ local function makeToggle(yPos, text, icon, defaultState, callback)
     return btn
 end
 
-local FarmBtn = makeToggle(56, "ذكي + شخصيتين كذبيه", "🧠", false, function(state)
+local FarmBtn = makeToggle(56, "طيران + جمع ذكي", "🧠", false, function(state)
     farmActive = state
     if state then
         stage = "idle"
@@ -898,8 +894,6 @@ local FarmBtn = makeToggle(56, "ذكي + شخصيتين كذبيه", "🧠", fal
         if char then
             local hrp = char:FindFirstChild("HumanoidRootPart")
             removeBodyMovers(hrp)
-            destroyFakes()
-            stopFakeThreads()
             local hum = char:FindFirstChildOfClass("Humanoid")
             if hum then
                 hum.PlatformStand = false
@@ -1028,8 +1022,7 @@ local function updateCoinInfo()
     elseif stage == "init" then stageTag = " 📍"
     elseif stage == "farming" then stageTag = " 🌾"
     end
-    local fakeTag = (fake1 and fake2) and " 👥👥" or ""
-    CoinInfo.Text = "🪙 " .. uiCur .. "/" .. (uiMax > 0 and uiMax or 50) .. " " .. roleTag .. stageTag .. fakeTag .. "  •  خريطة:" .. mapCount
+    CoinInfo.Text = "🪙 " .. uiCur .. "/" .. (uiMax > 0 and uiMax or 50) .. " " .. roleTag .. stageTag .. "  •  خريطة:" .. mapCount
 end
 
 RunService.Heartbeat:Connect(function()
@@ -1041,8 +1034,6 @@ LocalPlayer.CharacterAdded:Connect(function(char)
     currentCoin = nil
     sheriffKillInProgress = false
     activelyFlinging = {}
-    destroyFakes()
-    stopFakeThreads()
     local hum = char:FindFirstChildOfClass("Humanoid")
     if hum then
         pcall(function()
