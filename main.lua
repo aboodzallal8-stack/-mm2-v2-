@@ -1,9 +1,9 @@
 --[[
-    عمو تشريب Hub - Mobile v66 ANTI-KICK & STABLE FARM
-    ===================================================
-    - Safe Underground Farming (8 Studs) - Anti-Kick Optimized
-    - Smooth Movement & Stable Speed (No Teleport / No Rapid CFrames)
-    - Perfect Coin Pathing (No skipping valid coins)
+    عمو تشريب Hub - Mobile v67 EXACT SPEED 26 & VALID COIN FILTER
+    ==============================================================
+    - Strict Underground Farming (8 Studs) - Anti-Kick & Valid Coins Only
+    - Calibrated Speed: EXACTLY 26
+    - Advanced Coin Filtering (Stops collecting fake/invalid objects)
     - Live Coin Counter (Max 50) + Custom Icon
 --]]
 
@@ -16,8 +16,8 @@ local CoreGui = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
 
--- CONFIGURATION (تم ضبط السرعة لتكون آمنة تماماً ضد الطرد)
-local FARM_SPEED = 18 
+-- CONFIGURATION
+local FARM_SPEED = 26 -- السرعة المضبوطة بدقة على 26
 local UNDER_OFFSET = 8
 local COIN_MAX_LIMIT = 50
 
@@ -28,6 +28,7 @@ local antiAFKActive = true
 
 local collectedCoinsCount = 0
 local coinsCache = {}
+local lastCacheUpdate = 0
 
 -- ANTI-STUCK SYSTEM
 local currentTargetCoin = nil
@@ -47,9 +48,12 @@ task.spawn(function()
     end
 end)
 
--- GET VALID COINS SAFELY
+-- STRICT VALID COIN FILTER (فلترة دقيقة لجمع العملات الحقيقية فقط وعدم جمع أشياء غير موجودة)
 local function getValidCoins()
+    if tick() - lastCacheUpdate < 0.1 then return coinsCache end
+    lastCacheUpdate = tick()
     coinsCache = {}
+    
     pcall(function()
         for _, map in ipairs(workspace:GetChildren()) do
             if map.Name ~= "Lobby" then
@@ -58,8 +62,11 @@ local function getValidCoins()
                     local children = container:GetChildren()
                     for i = 1, #children do
                         local coin = children[i]
+                        -- تحقق صارم جداً أن الجزء عبارة عن عملة حقيقية وموجودة وفيزيائية وليست أجزاء وهمية
                         if coin and coin:IsA("BasePart") and coin.Parent and not blacklistedCoins[coin] then
-                            table.insert(coinsCache, coin)
+                            if (coin:FindFirstChild("TouchInterest") or coin:FindFirstChildWhichIsA("TouchTransmitter")) or coin.Size.Magnitude < 5 then
+                                table.insert(coinsCache, coin)
+                            end
                         end
                     end
                 end
@@ -135,7 +142,7 @@ LocalPlayer.CharacterAdded:Connect(function()
     blacklistedCoins = {}
 end)
 
--- TRIGGER TOUCH INTEREST
+-- TRIGGER TOUCH INTEREST SAFELY
 local function triggerUndergroundTouch(coin, char, hrp)
     if not coin or not coin.Parent or not hrp then return end
     pcall(function()
@@ -150,7 +157,7 @@ local function triggerUndergroundTouch(coin, char, hrp)
     end)
 end
 
--- MAIN ANTI-KICK FARM LOOP
+-- MAIN FARM LOOP (EXACT SPEED 26 & VALID FILTER)
 RunService.Heartbeat:Connect(function(dt)
     pcall(function()
         if not farmActive then return end
@@ -183,20 +190,19 @@ RunService.Heartbeat:Connect(function(dt)
                 currentTargetCoin = coin
                 coinTargetStartTime = tick()
             else
-                -- مهلة زمنية متوازنة لعدم تخطي العملة بسرعة
-                if tick() - coinTargetStartTime > 1.5 then
+                if tick() - coinTargetStartTime > 0.4 then
                     blacklistedCoins[coin] = true
                     currentTargetCoin = nil
                     return
                 end
             end
 
-            -- حركة سلسة وآمنة تماماً ضد الطرد (Anti-Kick Smooth CFrame)
+            -- الحركة بالسرعة 26 بالضبط ودون أي تلبورت
             local targetPos = Vector3.new(coin.Position.X, coin.Position.Y - UNDER_OFFSET, coin.Position.Z)
             local delta = targetPos - hrp.Position
             local moveStep = math.min(delta.Magnitude, FARM_SPEED * dt)
             
-            if delta.Magnitude > 0.1 then
+            if delta.Magnitude > 0.05 then
                 hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * moveStep)
             else
                 hrp.CFrame = CFrame.new(targetPos)
@@ -212,7 +218,7 @@ end)
 
 -- UI INTERFACE SETUP
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AmoChereebUltimateV66"
+ScreenGui.Name = "AmoChereebUltimateV67"
 ScreenGui.Parent = CoreGui
 ScreenGui.ResetOnSpawn = false
 
@@ -259,7 +265,7 @@ local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(1, -50, 1, 0)
 TitleText.Position = UDim2.new(0, 15, 0, 0)
 TitleText.BackgroundTransparency = 1
-TitleText.Text = "⚡ عمو تشريب Hub - v66"
+TitleText.Text = "⚡ عمو تشريب Hub - v67"
 TitleText.TextColor3 = Color3.fromRGB(255, 170, 0)
 TitleText.Font = Enum.Font.GothamBold
 TitleText.TextSize = 15
@@ -362,7 +368,7 @@ local function createToggle(yPos, text, icon, default, callback)
     end)
 end
 
-createToggle(0, "تجميع آمن ضد الطرد (تحت الأرض)", "🪙", false, function(st)
+createToggle(0, "تجميع عملات حقيقية (سرعة 26)", "🪙", false, function(st)
     farmActive = st
     if not st then
         cleanupPhysics()
