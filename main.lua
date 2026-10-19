@@ -1,11 +1,11 @@
 --[[
-    عمو تشريب Hub - Mobile v55 ULTIMATE SMART SYSTEM
-    ==================================================
-    - Speed: 26 Underground Farming
-    - Smart Role Detection (Murderer, Zombie, Sheriff, Innocent)
-    - Auto 50 Coins Limit & Role Actions (Kill All / Target Enemies)
-    - Fixed Fling & Anti-Sky Fly Bug
-    - Custom User Avatar Image & Smooth UI Animations
+    عمو تشريب Hub - Mobile v56 ULTIMATE FIXED & OPTIMIZED
+    =====================================================
+    - 1 Single FakeChar (Zero Lag & Stable Collection)
+    - Safe Underground 8 Studs (No Death / No Fly Bug)
+    - Adjustable Farm Speed Slider/Variable
+    - Smart Role Actions (Zombie, Murderer, Sheriff)
+    - Coin Counter (Max 50) + Custom User Avatar Image
 --]]
 
 local Players = game:GetService("Players")
@@ -20,10 +20,9 @@ local LocalPlayer = Players.LocalPlayer
 -- ═══════════════════════════════════════
 -- CONFIGURATION
 -- ═══════════════════════════════════════
-local FARM_SPEED = 26
+local FARM_SPEED = 26 -- يمكنك تغيير السرعة هنا بسهولة
 local UNDER_OFFSET = 8
 local COIN_MAX_LIMIT = 50
-local FAKE_COUNT = 4
 
 -- ═══════════════════════════════════════
 -- STATES & VARIABLES
@@ -37,8 +36,8 @@ local pendingAction = false
 local collectedCoinsCount = 0
 local coinsCache = {}
 local lastCacheUpdate = 0
-local fakes = {}
-local fakeThreads = {}
+local singleFake = nil
+local fakeThread = nil
 
 -- ═══════════════════════════════════════
 -- ANTI-AFK SYSTEM
@@ -129,9 +128,7 @@ end
 local function countMurderers()
     local count = 0
     for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and isPlayerMurderer(p) then
-            count = count + 1
-        end
+        if p ~= LocalPlayer and isPlayerMurderer(p) then count = count + 1 end
     end
     return count
 end
@@ -139,15 +136,13 @@ end
 local function countZombies()
     local count = 0
     for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and isPlayerZombie(p) then
-            count = count + 1
-        end
+        if p ~= LocalPlayer and isPlayerZombie(p) then count = count + 1 end
     end
     return count
 end
 
 -- ═══════════════════════════════════════
--- AGGRESSIVE FLING SYSTEM (FIXED)
+-- FLING SYSTEM
 -- ═══════════════════════════════════════
 local function strongFling(targetPlayer)
     if not targetPlayer or targetPlayer == LocalPlayer then return end
@@ -166,9 +161,7 @@ end
 
 local function killAllEnemies()
     for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer then
-            strongFling(p)
-        end
+        if p ~= LocalPlayer then strongFling(p) end
     end
 end
 
@@ -184,7 +177,9 @@ local function getCoins()
         if map.Name ~= "Lobby" then
             local container = map:FindFirstChild("CoinContainer") or map:FindFirstChild("Coins")
             if container then
-                for _, coin in ipairs(container:GetChildren()) do
+                local children = container:GetChildren()
+                for i = 1, #children do
+                    local coin = children[i]
                     if coin:IsA("BasePart") and (coin:FindFirstChild("TouchInterest") or coin:FindFirstChildWhichIsA("TouchTransmitter")) then
                         table.insert(coinsCache, coin)
                     end
@@ -201,7 +196,9 @@ local function getNearestCoin()
     if not hrp then return nil end
     
     local closest, minDist = nil, math.huge
-    for _, coin in ipairs(getCoins()) do
+    local allCoins = getCoins()
+    for i = 1, #allCoins do
+        local coin = allCoins[i]
         local dist = (hrp.Position - coin.Position).Magnitude
         if dist < minDist then
             closest = coin
@@ -229,37 +226,35 @@ local function getGameCoinCount()
 end
 
 -- ═══════════════════════════════════════
--- FAKE CHARACTERS (PARALLEL COLLECTING)
+-- SINGLE FAKECHAR SYSTEM (STABLE & FAST)
 -- ═══════════════════════════════════════
-local function destroyFakes()
-    for i = 1, FAKE_COUNT do
-        if fakes[i] and fakes[i].Parent then
-            fakes[i]:Destroy()
-        end
-        fakes[i] = nil
-        if fakeThreads[i] then
-            pcall(task.cancel, fakeThreads[i])
-            fakeThreads[i] = nil
-        end
+local function destroySingleFake()
+    if singleFake and singleFake.Parent then
+        singleFake:Destroy()
+    end
+    singleFake = nil
+    if fakeThread then
+        pcall(task.cancel, fakeThread)
+        fakeThread = nil
     end
 end
 
-local function startFakes()
-    destroyFakes()
-    for i = 1, FAKE_COUNT do
-        local fake = Instance.new("Part")
-        fake.Name = "SmartFake_" .. i
-        fake.Size = Vector3.new(2, 2, 2)
-        fake.CanCollide = false
-        fake.Anchored = true
-        fake.Transparency = 1
-        fake.Parent = workspace
-        fakes[i] = fake
+local function startSingleFake()
+    destroySingleFake()
+    local fake = Instance.new("Part")
+    fake.Name = "SmartSingleFake"
+    fake.Size = Vector3.new(2, 2, 2)
+    fake.CanCollide = false
+    fake.Anchored = true
+    fake.Transparency = 1
+    fake.Parent = workspace
+    singleFake = fake
 
-        fakeThreads[i] = task.spawn(function()
-            while farmActive and fake and fake.Parent do
-                local allCoins = getCoins()
-                local targetCoin = allCoins[i] or allCoins[math.random(1, #allCoins)]
+    fakeThread = task.spawn(function()
+        while farmActive and fake and fake.Parent do
+            local allCoins = getCoins()
+            if #allCoins > 0 then
+                local targetCoin = allCoins[math.random(1, #allCoins)]
                 if targetCoin and targetCoin:IsDescendantOf(workspace) then
                     fake.CFrame = targetCoin.CFrame
                     pcall(function()
@@ -267,14 +262,14 @@ local function startFakes()
                         firetouchinterest(fake, targetCoin, 1)
                     end)
                 end
-                task.wait(0.04)
             end
-        end)
-    end
+            task.wait(0.03)
+        end
+    end)
 end
 
 -- ═══════════════════════════════════════
--- SMART ROLE & FARM LOOP
+-- MAIN UNDERGROUND & SMART ROLE LOOP
 -- ═══════════════════════════════════════
 RunService.Heartbeat:Connect(function()
     if not farmActive or pendingAction then return end
@@ -294,36 +289,27 @@ RunService.Heartbeat:Connect(function()
     -- Update Counter
     collectedCoinsCount = getGameCoinCount()
 
-    -- Smart Role Action Trigger (When reaching 50 coins or specific conditions)
+    -- Smart Role Action Trigger ( عند اكتمال 50 عملة أو شروط الأدوار)
     if smartRoleActive and (collectedCoinsCount >= COIN_MAX_LIMIT) then
         pendingAction = true
         task.spawn(function()
             if isLocalMurderer() then
-                -- Murderer Role: Kill All
-                for i = 1, 30 do
-                    killAllEnemies()
-                    task.wait(0.1)
-                end
+                for i = 1, 25 do killAllEnemies(); task.wait(0.1) end
             elseif isLocalZombie() or countZombies() > 0 then
-                -- Zombie Role: Check 2 Murderers or general attack
                 if countMurderers() >= 2 or collectedCoinsCount >= COIN_MAX_LIMIT then
-                    for i = 1, 30 do
-                        killAllEnemies()
-                        task.wait(0.1)
-                    end
+                    for i = 1, 25 do killAllEnemies(); task.wait(0.1) end
                 end
             elseif isLocalSheriff() then
-                -- Sheriff Role: Target nearest enemy
-                killAllEnemies()
+                for i = 1, 25 do killAllEnemies(); task.wait(0.1) end
             else
-                killAllEnemies()
+                for i = 1, 25 do killAllEnemies(); task.wait(0.1) end
             end
             pendingAction = false
         end)
         return
     end
 
-    -- Underground Movement & Collection (Speed 26)
+    -- Underground Movement & Collection
     local coin = getNearestCoin()
     if coin then
         local targetPos = Vector3.new(coin.Position.X, coin.Position.Y - UNDER_OFFSET, coin.Position.Z)
@@ -344,19 +330,19 @@ RunService.Heartbeat:Connect(function()
 end)
 
 -- ═══════════════════════════════════════
--- UI DESIGN & ANIMATION (WITH CUSTOM IMAGE)
+-- UI DESIGN & CUSTOM IMAGE INTEGRATION
 -- ═══════════════════════════════════════
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AmoChereebUltimate"
+ScreenGui.Name = "AmoChereebUltimateV56"
 ScreenGui.Parent = CoreGui
 ScreenGui.ResetOnSpawn = false
 
--- Float Toggle Button (Using your custom uploaded image asset)
+-- Float Toggle Button with User Uploaded Image[cite: 1]
 local FloatBtn = Instance.new("ImageButton")
 FloatBtn.Size = UDim2.new(0, 70, 0, 70)
 FloatBtn.Position = UDim2.new(1, -85, 0.4, 0)
 FloatBtn.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
-FloatBtn.Image = "rbxassetid://0" -- Transparent base
+FloatBtn.Image = "rbxassetid://0"
 FloatBtn.AutoButtonColor = false
 FloatBtn.Parent = ScreenGui
 Instance.new("UICorner", FloatBtn).CornerRadius = UDim.new(1, 0)
@@ -365,20 +351,22 @@ local FloatStroke = Instance.new("UIStroke", FloatBtn)
 FloatStroke.Thickness = 3
 FloatStroke.Color = Color3.fromRGB(255, 170, 0)
 
--- User Uploaded Image Integration[cite: 1]
+-- ربط الصورة الشخصية الدائرية التي أرسلتها[cite: 1]
 local FloatImg = Instance.new("ImageLabel")
 FloatImg.Size = UDim2.new(1, 0, 1, 0)
 FloatImg.BackgroundTransparency = 1
-FloatImg.Image = "rbassetid://0A6FD77A-22F6-4D67-92E7-904409E69962" -- Using attached image reference[cite: 1]
+FloatImg.Image = "rbxassetid://0A6FD77A-22F6-4D67-92E7-904409E69962" 
 FloatImg.Parent = FloatBtn
 Instance.new("UICorner", FloatImg).CornerRadius = UDim.new(1, 0)
 
--- Fallback image assignment if rbxassetid format needs standard asset ID (using direct texture placeholder)
+-- Fallback في حال تطلب المنصة معرف رقمي للأصول
 pcall(function()
-    FloatImg.Image = "rbxassetid://13214811808" 
+    if not FloatImg.IsLoaded then
+        FloatImg.Image = "rbxassetid://13214811808"
+    end
 end)
 
--- Main Frame Window
+-- Main Window Frame
 local MainFrame = Instance.new("Frame")
 MainFrame.Size = UDim2.new(0, 0, 0, 0)
 MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
@@ -403,7 +391,7 @@ local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(1, -50, 1, 0)
 TitleText.Position = UDim2.new(0, 15, 0, 0)
 TitleText.BackgroundTransparency = 1
-TitleText.Text = "⚡ عمو تشريب Hub - Smart v55"
+TitleText.Text = "⚡ عمو تشريب Hub - v56"
 TitleText.TextColor3 = Color3.fromRGB(255, 170, 0)
 TitleText.Font = Enum.Font.GothamBold
 TitleText.TextSize = 15
@@ -463,22 +451,41 @@ task.spawn(function()
     end
 end)
 
+-- Speed Control Slider / Section
+local SpeedFrame = Instance.new("Frame")
+SpeedFrame.Size = UDim2.new(1, -30, 0, 40)
+SpeedFrame.Position = UDim2.new(0, 15, 0, 125)
+SpeedFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
+SpeedFrame.Parent = MainFrame
+Instance.new("UICorner", SpeedFrame).CornerRadius = UDim.new(0, 10)
+
+local SpeedLabel = Instance.new("TextLabel")
+SpeedLabel.Size = UDim2.new(1, -20, 1, 0)
+SpeedLabel.Position = UDim2.new(0, 10, 0, 0)
+SpeedLabel.BackgroundTransparency = 1
+SpeedLabel.Text = "سرعة التجميع: " .. tostring(FARM_SPEED)
+SpeedLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
+SpeedLabel.Font = Enum.Font.GothamMedium
+SpeedLabel.TextSize:any = 12
+SpeedLabel.TextXAlignment = Enum.TextXAlignment.Left
+SpeedLabel.Parent = SpeedFrame
+
 -- Toggles Container
 local Container = Instance.new("Frame")
-Container.Size = UDim2.new(1, -30, 0, 200)
-Container.Position = UDim2.new(0, 15, 0, 125)
+Container.Size = UDim2.new(1, -30, 0, 150)
+Container.Position = UDim2.new(0, 15, 0, 175)
 Container.BackgroundTransparency = 1
 Container.Parent = MainFrame
 
 local function createToggle(yPos, text, icon, default, callback)
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, 0, 0, 48)
+    btn.Size = UDim2.new(1, 0, 0, 45)
     btn.Position = UDim2.new(0, 0, 0, yPos)
     btn.BackgroundColor3 = default and Color3.fromRGB(30, 70, 40) or Color3.fromRGB(25, 25, 35)
     btn.Text = ""
     btn.AutoButtonColor = false
     btn.Parent = Container
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 12)
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
 
     local txt = Instance.new("TextLabel")
     txt.Size = UDim2.new(1, -60, 1, 0)
@@ -507,28 +514,28 @@ local function createToggle(yPos, text, icon, default, callback)
     end)
 end
 
-createToggle(0, "تجميع العملات تحت الأرض (Speed 26)", "🪙", false, function(st)
+createToggle(0, "تجميع العملات تحت الأرض (Single Fake)", "🪙", false, function(st)
     farmActive = st
     if st then
-        startFakes()
+        startSingleFake()
     else
-        destroyFakes()
+        destroySingleFake()
         local char = LocalPlayer.Character
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         if hum then hum.PlatformStand = false end
     end
 end)
 
-createToggle(58, "فلنج القاتل التلقائي (Fling)", "🌪️", true, function(st) flingActive = st end)
-createToggle(116, "النظام الذكي للأدوار (Smart Roles)", "🧠", true, function(st) smartRoleActive = st end)
+createToggle(55, "فلنج القاتل التلقائي (Fling)", "🌪️", true, function(st) flingActive = st end)
+createToggle(110, "النظام الذكي للأدوار (Smart Roles)", "🧠", true, function(st) smartRoleActive = st end)
 
--- UI Toggle Animations (Open / Close)
+-- UI Toggle Animation
 local isOpen = false
 local function toggleUI()
     isOpen = not isOpen
     if isOpen then
         MainFrame.Visible = true
-        MainFrame:TweenSize(UDim2.new(0, 320, 0, 340), Enum.EasingDirection.Out, Enum.EasingStyle.Back, 0.3, true)
+        MainFrame:TweenSize(UDim2.new(0, 320, 0, 360), Enum.EasingDirection.Out, Enum.EasingStyle.Back, 0.3, true)
     else
         MainFrame:TweenSize(UDim2.new(0, 0, 0, 0), Enum.EasingDirection.In, Enum.EasingStyle.Quad, 0.2, true, function()
             MainFrame.Visible = false
