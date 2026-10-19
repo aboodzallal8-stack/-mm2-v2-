@@ -1,10 +1,11 @@
 --[[
-    عمو تشريب Hub - Mobile v30 ULTRA FINAL
-    =========================================
-    - BodyVelocity fly (no kick, noclip players)
-    - Escape system (murderer + thrown knife)
-    - Real fling (AlignPosition + StrafingNoPhysics)
-    - Smart 50-coin handler per role
+    عمو تشريب Hub - Mobile v31
+    ===========================
+    - Speed 26.5 default
+    - Farm = Farm + Escape (linked)
+    - Smart Zombie = Kill all + Auto-kill (linked)
+    - Real fling
+    - Cleaner UI (fewer buttons)
 --]]
 
 local Players = game:GetService("Players")
@@ -19,12 +20,12 @@ local LocalPlayer = Players.LocalPlayer
 -- ═══════════════════════════════════════
 -- CONFIG
 -- ═══════════════════════════════════════
-local walkSpeed = 25             -- آمن تماماً
-local FLY_SPEED = 25
+local walkSpeed = 26.5
+local FLY_SPEED = 26.5
 local HOVER_HEIGHT = 3
 local COLLECT_RADIUS = 7
-local DANGER_DIST = 15           -- مسافة الخطر للميرد
-local KNIFE_DANGER = 20          -- مسافة خطر السكين
+local DANGER_DIST = 15
+local KNIFE_DANGER = 20
 local COIN_LIMIT = 50
 local FARM_MIN_TIME = 12
 
@@ -33,10 +34,8 @@ local FARM_MIN_TIME = 12
 -- ═══════════════════════════════════════
 local farmActive = false
 local flingActive = true
-local zombieKillActive = true
-local smartZombieActive = true
+local smartZombieActive = true  -- يشمل قتل الكل + التلقائي
 local smartSheriffActive = true
-local escapeActive = true
 local antiAFKActive = true
 local pendingRespawn = false
 local lastResetTime = 0
@@ -200,7 +199,7 @@ local function countZombies()
 end
 
 -- ═══════════════════════════════════════
--- REAL FLING (from verified script)
+-- REAL FLING
 -- ═══════════════════════════════════════
 local function flingPlayer(player)
     if not player or player == LocalPlayer then return end
@@ -215,7 +214,6 @@ local function flingPlayer(player)
     activelyFlinging[key] = true
 
     task.spawn(function()
-        -- Create destination (40M studs up like verified script)
         local fakepart = Instance.new("Part")
         fakepart.Name = "Fl_" .. key
         fakepart.Anchored = true
@@ -239,18 +237,15 @@ local function flingPlayer(player)
         body.Mode = Enum.PositionAlignmentMode.TwoAttachment
         body.Parent = fakepart
 
-        -- Force physics state
         pcall(function()
             hum:ChangeState(Enum.HumanoidStateType.StrafingNoPhysics)
         end)
 
-        -- Apply velocity
         pcall(function()
             hrp.AssemblyLinearVelocity = Vector3.new(0, 1000000, 0)
             hrp.Velocity = Vector3.new(0, 1000000, 0)
         end)
 
-        -- Continuous push for 5 seconds
         for i = 1, 150 do
             if not hrp.Parent or not hum.Parent or hum.Health <= 0 then break end
             pcall(function()
@@ -298,7 +293,7 @@ RunService.Heartbeat:Connect(function()
 end)
 
 -- ═══════════════════════════════════════
--- SMART ZOMBIE
+-- SMART ZOMBIE (kill all + auto)
 -- ═══════════════════════════════════════
 RunService.Heartbeat:Connect(function()
     if not smartZombieActive or pendingRespawn then return end
@@ -384,12 +379,12 @@ local function getNearestCoin()
 end
 
 local function getFarthestCoinFromPos(pos)
-    local closest, farthestDist = nil, -1
+    local best, bestDist = nil, -1
     for _, coin in ipairs(getAllCoins()) do
         local d = (coin.Position - pos).Magnitude
-        if d > farthestDist then farthestDist = d; closest = coin end
+        if d > bestDist then bestDist = d; best = coin end
     end
-    return closest
+    return best
 end
 
 local function getUICoinCount()
@@ -419,12 +414,11 @@ local function handle50Coins()
     if tick() - lastResetTime < 5 then return end
     pendingRespawn = true
     lastResetTime = tick()
-    print("[50] Action")
 
     local char = LocalPlayer.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
 
-    if isLocalZombie() and zombieKillActive then
+    if isLocalZombie() and smartZombieActive then
         for i = 1, 80 do killAll(isPlayerZombie); task.wait(0.05) end
         if hum then hum.PlatformStand = false; hum.WalkSpeed = 16 end
         if hum and hum.Health > 0 then pcall(function() hum.Health = 0 end) end
@@ -478,7 +472,7 @@ local function handle50Coins()
 end
 
 -- ═══════════════════════════════════════
--- FARM LOOP (BodyVelocity + noclip)
+-- FARM LOOP (fly + escape merged)
 -- ═══════════════════════════════════════
 RunService.Heartbeat:Connect(function()
     pcall(function()
@@ -489,46 +483,40 @@ RunService.Heartbeat:Connect(function()
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         if not hrp or not hum or hum.Health <= 0 then return end
 
-        -- Check 50
         local uiCur, uiMax = getUICoinCount()
         if uiMax >= 40 and uiCur >= uiMax and tick() - farmStartedAt > FARM_MIN_TIME then
             handle50Coins()
             return
         end
 
-        -- ═══ ESCAPE CHECK ═══
-        if escapeActive then
-            local danger = nil
-            -- Murderer check
-            if cachedMurderer and cachedMurderer.Character then
-                local mHRP = cachedMurderer.Character:FindFirstChild("HumanoidRootPart")
-                if mHRP and (hrp.Position - mHRP.Position).Magnitude < DANGER_DIST then
-                    danger = mHRP.Position
-                end
+        -- ═══ ESCAPE (auto when farm on) ═══
+        local danger = nil
+        if cachedMurderer and cachedMurderer.Character then
+            local mHRP = cachedMurderer.Character:FindFirstChild("HumanoidRootPart")
+            if mHRP and (hrp.Position - mHRP.Position).Magnitude < DANGER_DIST then
+                danger = mHRP.Position
             end
-            -- Knife check
-            if not danger then
-                for _, obj in ipairs(workspace:GetChildren()) do
-                    if obj:IsA("Tool") and obj.Name:lower():find("knife") then
-                        local handle = obj:FindFirstChild("Handle")
-                        if handle and (hrp.Position - handle.Position).Magnitude < KNIFE_DANGER then
-                            danger = handle.Position
-                            break
-                        end
+        end
+        if not danger then
+            for _, obj in ipairs(workspace:GetChildren()) do
+                if obj:IsA("Tool") and obj.Name:lower():find("knife") then
+                    local handle = obj:FindFirstChild("Handle")
+                    if handle and (hrp.Position - handle.Position).Magnitude < KNIFE_DANGER then
+                        danger = handle.Position
+                        break
                     end
-                end
-            end
-
-            if danger then
-                local escapeCoin = getFarthestCoinFromPos(danger)
-                if escapeCoin then
-                    escapeTarget = escapeCoin
-                    escapeUntil = tick() + 2
                 end
             end
         end
 
-        -- If escaping, target the escape coin
+        if danger then
+            local escapeCoin = getFarthestCoinFromPos(danger)
+            if escapeCoin then
+                escapeTarget = escapeCoin
+                escapeUntil = tick() + 2
+            end
+        end
+
         local targetCoin = currentCoin
         if escapeTarget and tick() < escapeUntil then
             targetCoin = escapeTarget
@@ -544,20 +532,18 @@ RunService.Heartbeat:Connect(function()
         if not targetCoin then return end
         currentCoin = targetCoin
 
-        -- ═══ SETUP FLY ═══
+        -- ═══ FLY SETUP ═══
         hum.PlatformStand = true
         hum.WalkSpeed = 0
         hum.JumpPower = 0
         hum.AutoRotate = false
 
-        -- Noclip everything (including HRP for players passing)
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") then
                 if part.CanCollide then part.CanCollide = false end
             end
         end
 
-        -- ═══ MOVE via BodyVelocity + BodyPosition ═══
         local bv = hrp:FindFirstChild("FlyBV")
         if not bv then
             bv = Instance.new("BodyVelocity")
@@ -571,7 +557,7 @@ RunService.Heartbeat:Connect(function()
         if not bp then
             bp = Instance.new("BodyPosition")
             bp.Name = "FlyBP"
-            bp.MaxForce = Vector3.new(0, math.huge, 0) -- Y only
+            bp.MaxForce = Vector3.new(0, math.huge, 0)
             bp.P = 20000
             bp.D = 500
             bp.Parent = hrp
@@ -582,7 +568,6 @@ RunService.Heartbeat:Connect(function()
         local dist = delta.Magnitude
 
         if dist < 5 then
-            -- ═══ COLLECT ═══
             for _, part in ipairs(char:GetDescendants()) do
                 if part:IsA("BasePart") then
                     pcall(function() firetouchinterest(part, targetCoin, 0) end)
@@ -590,7 +575,6 @@ RunService.Heartbeat:Connect(function()
                 end
             end
 
-            -- Timeout stuck coin (0.8 sec)
             if tick() - coinAttemptStart > 0.8 then
                 stuckCoins[targetCoin] = true
                 currentCoin = nil
@@ -598,19 +582,15 @@ RunService.Heartbeat:Connect(function()
                 coinAttemptStart = tick()
             end
         else
-            -- Fly towards coin
             local horizontalDir = Vector3.new(delta.X, 0, delta.Z)
             if horizontalDir.Magnitude > 0.1 then
                 bv.Velocity = horizontalDir.Unit * FLY_SPEED
             else
                 bv.Velocity = Vector3.zero
             end
-
-            -- Hold Y position
             bp.Position = Vector3.new(hrp.Position.X, target.Y, hrp.Position.Z)
         end
 
-        -- Prevent falling
         if hrp.Position.Y < -50 then
             bp.Position = Vector3.new(hrp.Position.X, 50, hrp.Position.Z)
         end
@@ -752,13 +732,13 @@ UserInputService.InputEnded:Connect(function(input)
     end
 end)
 
--- ScrollingFrame
+-- ScrollingFrame (smaller now - only 5 buttons + speed + coin info)
 local ScrollingFrame = Instance.new("ScrollingFrame")
 ScrollingFrame.Size = UDim2.new(1, -8, 1, -60)
 ScrollingFrame.Position = UDim2.new(0, 4, 0, 54)
 ScrollingFrame.BackgroundTransparency = 1
 ScrollingFrame.BorderSizePixel = 0
-ScrollingFrame.CanvasSize = UDim2.new(0, 0, 0, 800)
+ScrollingFrame.CanvasSize = UDim2.new(0, 0, 0, 600)
 ScrollingFrame.ScrollBarThickness = 6
 ScrollingFrame.ScrollBarImageColor3 = Color3.fromRGB(212, 175, 55)
 ScrollingFrame.ScrollingDirection = Enum.ScrollingDirection.Y
@@ -864,7 +844,8 @@ SpeedBox.FocusLost:Connect(function()
     end
 end)
 
-local FarmBtn = makeToggle(56, "طيران + جمع", "✈️", false, function(state)
+-- 5 buttons only (merged)
+local FarmBtn = makeToggle(56, "طيران + جمع + هروب", "✈️", false, function(state)
     farmActive = state
     if state then
         stuckCoins = {}
@@ -894,29 +875,21 @@ local FlingBtn = makeToggle(122, "فلنك القاتل", "💥", true, function
     flingActive = state
 end)
 
-local EscapeBtn = makeToggle(188, "هروب ذكي", "🏃", true, function(state)
-    escapeActive = state
-end)
-
-local ZombieBtn = makeToggle(254, "قتل الكل كزومبي", "🧟", true, function(state)
-    zombieKillActive = state
-end)
-
-local SmartZombieBtn = makeToggle(320, "زومبي ذكي", "🧠", true, function(state)
+local SmartZombieBtn = makeToggle(188, "زومبي ذكي + قتل الكل", "🧟", true, function(state)
     smartZombieActive = state
 end)
 
-local SmartSheriffBtn = makeToggle(386, "شريف ذكي", "🔫", true, function(state)
+local SmartSheriffBtn = makeToggle(254, "شريف ذكي", "🔫", true, function(state)
     smartSheriffActive = state
 end)
 
-local AFKBtn = makeToggle(452, "مكافحة الطرد", "⏳", true, function(state)
+local AFKBtn = makeToggle(320, "مكافحة الطرد", "⏳", true, function(state)
     antiAFKActive = state
 end)
 
 local CoinPanel = Instance.new("Frame")
 CoinPanel.Size = UDim2.new(1, -16, 0, 44)
-CoinPanel.Position = UDim2.new(0, 8, 0, 518)
+CoinPanel.Position = UDim2.new(0, 8, 0, 386)
 CoinPanel.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
 CoinPanel.BorderSizePixel = 2
 CoinPanel.BorderColor3 = Color3.fromRGB(212, 175, 55)
@@ -935,7 +908,10 @@ CoinInfo.TextSize = 13
 CoinInfo.ZIndex = 4
 CoinInfo.Parent = CoinPanel
 
-local FULL_SIZE = UDim2.new(0, 340, 0, 460)
+-- Update canvas
+ScrollingFrame.CanvasSize = UDim2.new(0, 0, 0, 450)
+
+local FULL_SIZE = UDim2.new(0, 340, 0, 430)
 
 local function openMenu()
     MainFrame.Visible = true
