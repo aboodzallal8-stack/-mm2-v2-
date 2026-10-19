@@ -1,11 +1,11 @@
 --[[
-    عمو تشريب Hub - Mobile v64 EXACT SPEED 26
-    ===========================================
+    عمو تشريب Hub - Mobile v65 SMART COIN SEARCH & EXACT SPEED 26
+    ================================================================
     - Strict Underground Farming (8 Studs) - Zero Teleport
-    - Calibrated Speed: EXACTLY 26
-    - Continuous Instant Coin Collection
-    - Anti-Stuck Auto-Skip System (0.3s timeout)
-    - Live Coin Counter (Max 50) + Custom Icon
+    - Calibrated Movement Speed: EXACTLY 26
+    - Smart Nearest Coin Search Algorithm (Dynamic Distance Order)
+    - Auto-Skip & Anti-Stuck System
+    - Live Coin Counter (Max 50) + Custom User Icon
 --]]
 
 local Players = game:GetService("Players")
@@ -18,7 +18,7 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 
 -- CONFIGURATION
-local FARM_SPEED = 26 -- السرعة المضبوطة بدقة
+local FARM_SPEED = 26 -- سرعة الحركة والبحث المضبوطة
 local UNDER_OFFSET = 8
 local COIN_MAX_LIMIT = 50
 
@@ -48,15 +48,17 @@ task.spawn(function()
     end
 end)
 
--- GET ACTIVE ROUND COINS
-local function getCoins()
+-- SMART COIN FINDER & CACHE (البحث الذكي عن العملات النشطة)
+local function getValidCoins()
     coinsCache = {}
     pcall(function()
         for _, map in ipairs(workspace:GetChildren()) do
             if map.Name ~= "Lobby" then
                 local container = map:FindFirstChild("CoinContainer") or map:FindFirstChild("Coins")
                 if container then
-                    for _, coin in ipairs(container:GetChildren()) do
+                    local children = container:GetChildren()
+                    for i = 1, #children do
+                        local coin = children[i]
                         if coin and coin:IsA("BasePart") and coin.Parent and not blacklistedCoins[coin] then
                             table.insert(coinsCache, coin)
                         end
@@ -68,24 +70,30 @@ local function getCoins()
     return coinsCache
 end
 
-local function getNearestCoin()
+-- SMART NEAREST ALGORITHM (خوارزمية حساب الأقرب الذكية)
+local function getSmartNearestCoin()
     local char = LocalPlayer.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return nil end
     
-    local closest, minDist = nil, math.huge
-    local allCoins = getCoins()
+    local allCoins = getValidCoins()
+    if #allCoins == 0 then return nil end
+
+    local closestCoin = nil
+    local shortestDistance = math.huge
+    local hrpPos = hrp.Position
+
     for i = 1, #allCoins do
         local coin = allCoins[i]
         if coin and coin.Parent then
-            local dist = (hrp.Position - coin.Position).Magnitude
-            if dist < minDist then
-                closest = coin
-                minDist = dist
+            local dist = (hrpPos - coin.Position).Magnitude
+            if dist < shortestDistance then
+                shortestDistance = dist
+                closestCoin = coin
             end
         end
     end
-    return closest
+    return closestCoin
 end
 
 local function getGameCoinCount()
@@ -145,7 +153,7 @@ local function triggerUndergroundTouch(coin, char, hrp)
     end)
 end
 
--- MAIN FARM LOOP (EXACT SPEED 26)
+-- MAIN SMART FARM LOOP (EXACT SPEED 26 & DYNAMIC PATHING)
 RunService.Heartbeat:Connect(function(dt)
     pcall(function()
         if not farmActive then return end
@@ -155,7 +163,7 @@ RunService.Heartbeat:Connect(function(dt)
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         if not hrp or not hum or hum.Health <= 0 then return end
 
-        local allCoins = getCoins()
+        local allCoins = getValidCoins()
         if #allCoins == 0 then
             cleanupPhysics()
             blacklistedCoins = {}
@@ -172,20 +180,22 @@ RunService.Heartbeat:Connect(function(dt)
 
         collectedCoinsCount = getGameCoinCount()
 
-        local coin = getNearestCoin()
+        -- جلب أسرع وأقرب عملة باستخدام الخوارزمية
+        local coin = getSmartNearestCoin()
         if coin then
             if coin ~= currentTargetCoin then
                 currentTargetCoin = coin
                 coinTargetStartTime = tick()
             else
-                if tick() - coinTargetStartTime > 0.3 then
+                -- تخطي العملة المعلقة خلال 0.35 ثانية
+                if tick() - coinTargetStartTime > 0.35 then
                     blacklistedCoins[coin] = true
                     currentTargetCoin = nil
                     return
                 end
             end
 
-            -- الحركة بسرعة 26 بالضبط بدون زيادة مفرطة
+            -- تطبيق سرعة الحركة (26) بالضبط دون زيادة القوة
             local targetPos = Vector3.new(coin.Position.X, coin.Position.Y - UNDER_OFFSET, coin.Position.Z)
             local delta = targetPos - hrp.Position
             local moveStep = math.min(delta.Magnitude, FARM_SPEED * dt)
@@ -206,7 +216,7 @@ end)
 
 -- UI INTERFACE SETUP
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AmoChereebUltimateV64"
+ScreenGui.Name = "AmoChereebUltimateV65"
 ScreenGui.Parent = CoreGui
 ScreenGui.ResetOnSpawn = false
 
@@ -253,7 +263,7 @@ local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(1, -50, 1, 0)
 TitleText.Position = UDim2.new(0, 15, 0, 0)
 TitleText.BackgroundTransparency = 1
-TitleText.Text = "⚡ عمو تشريب Hub - v64"
+TitleText.Text = "⚡ عمو تشريب Hub - v65"
 TitleText.TextColor3 = Color3.fromRGB(255, 170, 0)
 TitleText.Font = Enum.Font.GothamBold
 TitleText.TextSize = 15
@@ -356,7 +366,7 @@ local function createToggle(yPos, text, icon, default, callback)
     end)
 end
 
-createToggle(0, "تجميع تحت الأرض (سرعة 26)", "🪙", false, function(st)
+createToggle(0, "تجميع ذكي (سرعة 26)", "🪙", false, function(st)
     farmActive = st
     if not st then
         cleanupPhysics()
