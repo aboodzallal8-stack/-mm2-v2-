@@ -1,8 +1,8 @@
 --[[
-    عمو تشريب Hub - Mobile v72 ZERO GHOST COINS FIX
-    ================================================
-    - Strict Real-Time Validity & Transparency Check
-    - Instantly skips ghost/collected/invisible coins
+    عمو تشريب Hub - Mobile v73 AUTO RESET AT 50 COINS
+    ==================================================
+    - Auto Character Reset when Coins Reach Max (50)
+    - Strict Real-Time Validity & Transparency Check (No Ghost Coins)
     - Underground Farm (8 Studs) at Speed 30
 --]]
 
@@ -38,6 +38,7 @@ local lastCacheUpdate = 0
 local currentTargetCoin = nil
 local coinTargetStartTime = 0
 local blacklistedCoins = {}
+local hasResetForMax = false
 
 local function safeParent(instance, parent)
     if instance and parent then
@@ -68,12 +69,10 @@ local function isRealAndExistingCoin(part)
         return false
     end
 
-    -- تأكد أن الكوين غير شفافة (يعني لم يتم جمعها وتلاشيها)
     if part.Transparency > 0.5 then
         return false
     end
 
-    -- التأكد أن الكوين تمتلك خاصية اللمس الفاعلة
     local hasTouch = part:FindFirstChild("TouchInterest") or part:FindFirstChildWhichIsA("TouchTransmitter")
     if not hasTouch then
         return false
@@ -201,6 +200,7 @@ LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
     cleanupPhysics()
     blacklistedCoins = {}
+    hasResetForMax = false -- إعادة تعيين الحالة عند العودة للحياة
 end)
 
 local function triggerUndergroundTouch(coin, char, hrp)
@@ -225,6 +225,20 @@ end
 RunService.Heartbeat:Connect(function(dt)
     pcall(function()
         if not farmActive then return end
+
+        collectedCoinsCount = getGameCoinCount()
+
+        -- فحص هل وصل الحد الأقصى 50 لعمل ريست تلقائي للشخصية
+        if collectedCoinsCount >= COIN_MAX_LIMIT and not hasResetForMax then
+            hasResetForMax = true
+            pcall(function()
+                local char = LocalPlayer.Character
+                if char and char:FindFirstChildOfClass("Humanoid") then
+                    char:FindFirstChildOfClass("Humanoid").Health = 0
+                end
+            end)
+            return
+        end
 
         local char = LocalPlayer.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -251,11 +265,8 @@ RunService.Heartbeat:Connect(function(dt)
             end
         end
 
-        collectedCoinsCount = getGameCoinCount()
-
         local coin = getSmartNearestCoin()
         if coin then
-            -- فحص إضافي: لو الكوين اختفت أو أصبحت شفافة أثناء التوجيه، تجاهلها فوراً
             if not coin.Parent or coin.Transparency > 0.5 then
                 blacklistedCoins[coin] = true
                 currentTargetCoin = nil
@@ -293,7 +304,7 @@ end)
 
 -- UI
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AmoChereebUltimateV72"
+ScreenGui.Name = "AmoChereebUltimateV73"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.IgnoreGuiInset = true
 safeParent(ScreenGui, CoreGui)
@@ -341,7 +352,7 @@ local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(1, -50, 1, 0)
 TitleText.Position = UDim2.new(0, 15, 0, 0)
 TitleText.BackgroundTransparency = 1
-TitleText.Text = "⚡ عمو تشريب Hub - v72"
+TitleText.Text = "⚡ عمو تشريب Hub - v73"
 TitleText.TextColor3 = Color3.fromRGB(255, 170, 0)
 TitleText.Font = Enum.Font.GothamBold
 TitleText.TextSize = 15
