@@ -1,8 +1,7 @@
 --[[
-    عمو تشريب Hub - Mobile v18 FINAL
-    - REAL FLY via BodyPosition + BodyGyro + Physics state
-    - Noclip on ALL parts (including HRP)
-    - Continuous fling every 1s until dead
+    عمو تشريب Hub - Mobile v19 FINAL-FINAL
+    - Force CFrame fly (every frame, no resistance)
+    - Direct CFrame fling (loop 0.05s, no BodyVelocity)
 --]]
 
 local Players = game:GetService("Players")
@@ -16,6 +15,7 @@ local LocalPlayer = Players.LocalPlayer
 -- ========== Config ==========
 local FLY_SPEED = 27
 local HOVER_HEIGHT = 2
+local COLLECT_RADIUS = 5
 
 -- ========== States ==========
 local farmActive = false
@@ -24,6 +24,9 @@ local antiAFKActive = true
 local pendingRespawn = false
 local lastResetTime = 0
 local ignoreCoins = {}
+local flyTarget = nil
+local lastFlyTime = 0
+local lastPosition = Vector3.zero
 
 -- ========== Anti-AFK ==========
 task.spawn(function()
@@ -75,60 +78,26 @@ local function getMurderer()
     return nil
 end
 
--- ========== Fling (powerful + reliable) ==========
-local function flingMurderer(murderer)
-    if not murderer then return end
-    task.spawn(function()
-        for attempt = 1, 20 do
-            local char = murderer.Character
-            if not char then break end
-            local hrp = char:FindFirstChild("HumanoidRootPart")
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if not hrp or not hum or hum.Health <= 0 then break end
-
-            -- BodyVelocity (fly up fast)
-            pcall(function()
-                local bv = hrp:FindFirstChild("FlingBV") or Instance.new("BodyVelocity", hrp)
-                bv.Name = "FlingBV"
-                bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-                bv.Velocity = Vector3.new(math.random(-5000, 5000), 120000, math.random(-5000, 5000))
-            end)
-
-            -- BodyAngularVelocity (spin)
-            pcall(function()
-                local bav = hrp:FindFirstChild("FlingBAV") or Instance.new("BodyAngularVelocity", hrp)
-                bav.Name = "FlingBAV"
-                bav.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-                bav.AngularVelocity = Vector3.new(999999, 999999, 999999)
-            end)
-
-            -- Direct CFrame + velocity
-            pcall(function()
-                hrp.CFrame = CFrame.new(math.random(-1500, 1500), 20000 + (attempt * 1500), math.random(-1500, 1500))
-                hrp.Velocity = Vector3.new(math.random(-10000, 10000), 120000, math.random(-10000, 10000))
-                hum.PlatformStand = true
-            end)
-
-            task.wait(0.08)
-        end
-        pcall(function()
-            local h = murderer.Character and murderer.Character:FindFirstChildOfClass("Humanoid")
-            if h then h.PlatformStand = false end
-        end)
-    end)
-end
-
--- ========== CONTINUOUS FLING LOOP (every 1s - UNTIL DEAD) ==========
+-- ========== DIRECT CFrame FLING LOOP (0.05s - fast kill) ==========
 task.spawn(function()
     while true do
-        task.wait(1)
+        task.wait(0.05)
         if flingActive and not pendingRespawn then
             local murderer = getMurderer()
             if murderer and murderer.Character then
+                local hrp = murderer.Character:FindFirstChild("HumanoidRootPart")
                 local hum = murderer.Character:FindFirstChildOfClass("Humanoid")
-                if hum and hum.Health > 0 then
-                    print("[FLING] Trying to kill: " .. murderer.Name .. " (HP: " .. hum.Health .. ")")
-                    flingMurderer(murderer)  -- يحاول كل ثانية
+                if hrp and hum and hum.Health > 0 then
+                    -- CFrame مباشر للسماء + Velocity عالية
+                    pcall(function()
+                        hrp.CFrame = CFrame.new(
+                            math.random(-100, 100),
+                            50000 + math.random(0, 10000),
+                            math.random(-100, 100)
+                        )
+                        hrp.Velocity = Vector3.new(0, 50000, 0)
+                        hrp.AssemblyLinearVelocity = Vector3.new(0, 50000, 0)
+                    end)
                 end
             end
         end
@@ -309,18 +278,11 @@ local FarmBtn = makeToggle(60, "طيران + جمع", "✈️", false, function(
     if not state then
         local char = LocalPlayer.Character
         if char then
-            -- تنظيف
-            local hrp = char:FindFirstChild("HumanoidRootPart")
-            if hrp then
-                local bp = hrp:FindFirstChild("FlyPos"); if bp then bp:Destroy() end
-                local bg = hrp:FindFirstChild("FlyGyro"); if bg then bg:Destroy() end
-            end
             local hum = char:FindFirstChildOfClass("Humanoid")
             if hum then
                 hum.PlatformStand = false
                 hum.WalkSpeed = 16
                 hum.JumpPower = 50
-                hum.AutoRotate = true
             end
             for _, part in ipairs(char:GetDescendants()) do
                 if part:IsA("BasePart") then part.CanCollide = true end
@@ -331,19 +293,6 @@ end)
 
 local FlingBtn = makeToggle(130, "فلنك القاتل", "💥", false, function(state)
     flingActive = state
-    if state then
-        task.spawn(function()
-            task.wait(0.2)
-            local m = getMurderer()
-            if m and m.Character then
-                local h = m.Character:FindFirstChildOfClass("Humanoid")
-                if h and h.Health > 0 then
-                    flingMurderer(m)
-                    print("[INSTANT] Flinged: " .. m.Name)
-                end
-            end
-        end)
-    end
 end)
 
 local AFKBtn = makeToggle(200, "مكافحة الطرد", "⏳", true, function(state)
@@ -413,7 +362,7 @@ local function getAllCoins()
         if map:FindFirstChild("CoinContainer") then
             for _, coin in ipairs(map.CoinContainer:GetChildren()) do
                 if coin:IsA("BasePart") and coin:FindFirstChild("TouchInterest") then
-                    if not ignoreCoins[coin] then
+                    if ignoreCoins[coin] ~= true then
                         table.insert(coins, coin)
                     end
                 end
@@ -468,16 +417,10 @@ local function doAutoRespawn()
     if tick() - lastResetTime < 5 then return end
     pendingRespawn = true
     lastResetTime = tick()
-    print("[RESET] Triggered")
+    print("[RESET] at 50 coins")
 
-    -- تنظيف الطيران
     local char = LocalPlayer.Character
     if char then
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        if hrp then
-            local bp = hrp:FindFirstChild("FlyPos"); if bp then bp:Destroy() end
-            local bg = hrp:FindFirstChild("FlyGyro"); if bg then bg:Destroy() end
-        end
         local hum = char:FindFirstChildOfClass("Humanoid")
         if hum then
             hum.PlatformStand = false
@@ -488,19 +431,20 @@ local function doAutoRespawn()
         end
     end
 
-    -- Fling murderer قبل الريست
     if flingActive then
         local m = getMurderer()
         if m and m.Character then
             local h = m.Character:FindFirstChildOfClass("Humanoid")
             if h and h.Health > 0 then
-                flingMurderer(m)
-                task.wait(1.5)
+                local hrp = m.Character:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    hrp.CFrame = CFrame.new(0, 50000, 0)
+                end
+                task.wait(1)
             end
         end
     end
 
-    -- الريست
     if char then
         local hum = char:FindFirstChildOfClass("Humanoid")
         if hum and hum.Health > 0 then
@@ -527,8 +471,8 @@ task.spawn(function()
     end
 end)
 
--- ========== FLY LOOP (v18: REAL FLY with BodyPosition) ==========
-RunService.Heartbeat:Connect(function(dt)
+-- ========== FORCE FLY (RunService.Stepped - before physics) ==========
+RunService.Stepped:Connect(function()
     pcall(function()
         if not farmActive or pendingRespawn then return end
 
@@ -537,55 +481,37 @@ RunService.Heartbeat:Connect(function(dt)
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         if not hrp or not hum or hum.Health <= 0 then return end
 
-        -- ========== FORCE FLY MODE ==========
-        -- تعطيل Humanoid تماماً
+        -- 🚀 FORCE FLY MODE
         hum.PlatformStand = true
         hum.WalkSpeed = 0
         hum.JumpPower = 0
-        hum.JumpHeight = 0
         hum.AutoRotate = false
-        pcall(function() hum:ChangeState(Enum.HumanoidStateType.Physics) end)
 
-        -- Noclip على كل الأجزاء (حتى HRP)
+        -- 🚫 Noclip على كل الأجزاء
         for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then
-                if part.CanCollide then part.CanCollide = false end
+            if part:IsA("BasePart") and part.CanCollide then
+                part.CanCollide = false
             end
         end
 
-        -- إنشاء BodyPosition لو ما موجود
-        local bodyPos = hrp:FindFirstChild("FlyPos")
-        if not bodyPos then
-            bodyPos = Instance.new("BodyPosition")
-            bodyPos.Name = "FlyPos"
-            bodyPos.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-            bodyPos.P = 100000
-            bodyPos.D = 1000
-            bodyPos.Parent = hrp
-        end
-
-        -- إنشاء BodyGyro لو ما موجود
-        local bodyGyro = hrp:FindFirstChild("FlyGyro")
-        if not bodyGyro then
-            bodyGyro = Instance.new("BodyGyro")
-            bodyGyro.Name = "FlyGyro"
-            bodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-            bodyGyro.P = 10000
-            bodyGyro.D = 500
-            bodyGyro.Parent = hrp
-        end
-
-        -- البحث عن كوين
-        local coin, dist = getNearestCoin()
+        -- 🎯 البحث عن كوين
+        local coin = getNearestCoin()
         if not coin then return end
 
-        -- وضع الهدف فوق الكوين
+        local dist = (hrp.Position - coin.Position).Magnitude
         local targetPos = coin.Position + Vector3.new(0, HOVER_HEIGHT, 0)
-        bodyPos.Position = targetPos
-        bodyGyro.CFrame = CFrame.new(hrp.Position, targetPos)
 
-        -- جمع لو قريب
-        if dist < 5 then
+        -- ✈️ إجبار CFrame مباشرة (كل فريم)
+        if dist > 2 then
+            local delta = targetPos - hrp.Position
+            local step = math.min(FLY_SPEED / 60, delta.Magnitude)
+            if step > 0 then
+                local newPos = hrp.Position + delta.Unit * step
+                hrp.CFrame = CFrame.new(newPos)
+            end
+        else
+            -- جمع
+            hrp.CFrame = CFrame.new(targetPos)
             for _, part in ipairs(char:GetDescendants()) do
                 if part:IsA("BasePart") then
                     pcall(function()
@@ -594,14 +520,12 @@ RunService.Heartbeat:Connect(function(dt)
                     end)
                 end
             end
-
-            -- لو نفس الكوين لأكثر من 1.5 ثانية، تجاهله
-            if not ignoreCoins[coin] then
-                ignoreCoins[coin] = tick()
-            elseif tick() - ignoreCoins[coin] > 1.5 then
-                ignoreCoins[coin] = true -- تجاهل دائم
-            end
         end
+
+        -- إجبار Velocity = 0 (مافي سقوط)
+        hrp.Velocity = Vector3.zero
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.RotVelocity = Vector3.zero
     end)
 end)
 
@@ -616,7 +540,7 @@ RunService.Heartbeat:Connect(function()
     pcall(updateCoinInfo)
 end)
 
--- Respawn handler
+-- Respawn
 LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(0.5)
     if not farmActive then
