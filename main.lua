@@ -1,15 +1,17 @@
 --[[
-    عمو تشريب Hub - Mobile v78 FAKE CHARACTER & UNDERGROUND FLY
-    ============================================================
-    - Underground Smooth Flight (8 Studs Offset) at Speed 30
-    - Fake Character / Touch Proxy Mechanism (No Teleporting)
-    - Auto Character Reset at Max 50 Coins
+    عمو تشريب Hub - Mobile v79 SMOOTH UNDERGROUND FLIGHT & AUTO-RESET
+    =================================================================
+    - Smooth Flight / Gliding Movement (NO Instant Teleport)
+    - Underground Positioning (8 Studs Offset below coins)
+    - Strict Real Coin Validation (Ignores Lobby & Ghost/Fake Coins)
+    - Auto Character Reset when Coins Reach 50
 --]]
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local VirtualUser = game:GetService("VirtualUser")
+local CoreGui = game:GetService("CoreGui")
 
 if not game:IsLoaded() then
     game.Loaded:Wait()
@@ -22,7 +24,7 @@ while not LocalPlayer do
 end
 
 -- CONFIG
-local FARM_SPEED = 30
+local FARM_SPEED = 0.2 -- سرعة الطيران والانزلاق السلس (كلما اقتربت من 1 زادت السرعة)
 local UNDER_OFFSET = 8
 local COIN_MAX_LIMIT = 50
 
@@ -33,13 +35,11 @@ local antiAFKActive = true
 
 local collectedCoinsCount = 0
 local coinsCache = {}
-lastCacheUpdate = 0
+local lastCacheUpdate = 0
 local currentTargetCoin = nil
 local coinTargetStartTime = 0
 local blacklistedCoins = {}
 local hasResetForMax = false
-
-local fakeCharContainer = nil
 
 local function safeParent(instance, parent)
     if instance and parent then
@@ -49,7 +49,7 @@ local function safeParent(instance, parent)
     end
 end
 
--- ANTI-AFK
+-- ANTI-AFK SYSTEM
 task.spawn(function()
     while true do
         if antiAFKActive then
@@ -70,28 +70,24 @@ local function getGameCoinCount()
         local mainGui = LocalPlayer.PlayerGui:FindFirstChild("MainGUI")
         if not mainGui then return 0 end
 
-        local gameGui = mainGui:FindFirstChild("Game")
-        if not gameGui then return 0 end
-
-        local coinBags = gameGui:FindFirstChild("CoinBags")
-        if not coinBags then return 0 end
-
-        for _, bag in ipairs(coinBags:GetDescendants()) do
-            if bag:IsA("TextLabel") and bag.Name == "Coins" then
-                local num = bag.Text:match("(%d+)")
-                if num then
-                    return tonumber(num)
+        for _, desc in ipairs(mainGui:GetDescendants()) do
+            if desc.Name == "CoinBags" then
+                for _, bag in ipairs(desc:GetDescendants()) do
+                    if bag:IsA("TextLabel") and bag.Name == "Coins" then
+                        local num = bag.Text:match("(%d+)")
+                        if num then
+                            return tonumber(num)
+                        end
+                    end
                 end
             end
         end
-
         return 0
     end)
-
     return success and result or 0
 end
 
--- COIN VALIDATION
+-- STRICT COIN VALIDATION (فحص دقيق للكوينز الحقيقية واستبعاد اللوبي)
 local function isRealAndExistingCoin(part)
     if not part or not part:IsA("BasePart") then
         return false
@@ -108,6 +104,15 @@ local function isRealAndExistingCoin(part)
     local hasTouch = part:FindFirstChild("TouchInterest") or part:FindFirstChildWhichIsA("TouchTransmitter")
     if not hasTouch then
         return false
+    end
+
+    -- التأكد من عدم وجود الكوين في اللوبي
+    local p = part.Parent
+    while p and p ~= workspace do
+        if p.Name:lower():find("lobby") then
+            return false
+        end
+        p = p.Parent
     end
 
     local name = (part.Name or ""):lower()
@@ -134,17 +139,7 @@ local function getValidCoins()
     pcall(function()
         for _, obj in ipairs(workspace:GetDescendants()) do
             if obj and obj:IsA("BasePart") and not seen[obj] and not blacklistedCoins[obj] then
-                local isInLobby = false
-                local p = obj.Parent
-                while p and p ~= workspace do
-                    if p.Name:lower():find("lobby") then
-                        isInLobby = true
-                        break
-                    end
-                    p = p.Parent
-                end
-
-                if not isInLobby and isRealAndExistingCoin(obj) then
+                if isRealAndExistingCoin(obj) then
                     table.insert(coinsCache, obj)
                     seen[obj] = true
                 end
@@ -172,7 +167,7 @@ local function getSmartNearestCoin()
     local hrpPos = hrp.Position
 
     for _, coin in ipairs(allCoins) do
-        if coin and coin.Parent and coin.Parent ~= nil then
+        if coin and coin.Parent then
             local dist = (hrpPos - coin.Position).Magnitude
             if dist < shortestDistance then
                 shortestDistance = dist
@@ -182,26 +177,6 @@ local function getSmartNearestCoin()
     end
 
     return closestCoin
-end
-
--- FAKE CHARACTER / PROXY CREATION
-local function getOrCreateFakeTouchPart(char)
-    if fakeCharContainer and fakeCharContainer.Parent then
-        return fakeCharContainer
-    end
-
-    pcall(function()
-        local part = Instance.new("Part")
-        part.Name = "FakeTouchProxy"
-        part.Size = Vector3.new(2, 2, 2)
-        part.Transparency = 1
-        part.CanCollide = false
-        part.Anchored = true
-        part.Parent = char
-        fakeCharContainer = part
-    end)
-
-    return fakeCharContainer
 end
 
 local function cleanupPhysics()
@@ -221,11 +196,6 @@ local function cleanupPhysics()
             hum.PlatformStand = false
             hum:ChangeState(Enum.HumanoidStateType.GettingUp)
         end
-
-        if fakeCharContainer then
-            fakeCharContainer:Destroy()
-            fakeCharContainer = nil
-        end
     end)
 end
 
@@ -236,33 +206,28 @@ LocalPlayer.CharacterAdded:Connect(function()
     hasResetForMax = false
 end)
 
--- TOUCH COLLECTION VIA FAKE CHARACTER / REAL TOUCH INTEREST
-local function triggerFakeTouch(coin, char, hrp)
-    if not coin or not coin.Parent or not hrp then
-        return
-    end
-
+local function triggerTouch(coin, char, hrp)
+    if not coin or not coin.Parent or not hrp then return end
     pcall(function()
-        local fakePart = getOrCreateFakeTouchPart(char)
-        if fakePart then
-            fakePart.Position = coin.Position
-            firetouchinterest(fakePart, coin, 0)
-            firetouchinterest(fakePart, coin, 1)
-        end
-
         firetouchinterest(hrp, coin, 0)
         firetouchinterest(hrp, coin, 1)
+        for _, part in ipairs(char:GetChildren()) do
+            if part:IsA("BasePart") then
+                firetouchinterest(part, coin, 0)
+                firetouchinterest(part, coin, 1)
+            end
+        end
     end)
 end
 
--- MAIN FARM LOOP (UNDERGROUND FLY & FAKE PROXY)
+-- MAIN SMOOTH FLIGHT & FARM LOOP (طيران وانزلاق تدريجي بدون تيليبورت)
 RunService.Heartbeat:Connect(function(dt)
     pcall(function()
         if not farmActive then return end
 
         collectedCoinsCount = getGameCoinCount()
 
-        -- Auto Reset at 50 coins
+        -- Auto Reset when coins reach 50
         if collectedCoinsCount >= COIN_MAX_LIMIT and not hasResetForMax then
             hasResetForMax = true
             pcall(function()
@@ -290,9 +255,10 @@ RunService.Heartbeat:Connect(function(dt)
             return
         end
 
-        -- تفعيل الطيران الحر السلس تحت الأرض
+        -- تفعيل حالة السباحة/الطيران الحر وإلغاء التصادم
         hum:ChangeState(Enum.HumanoidStateType.Swimming)
-        
+        hum.PlatformStand = true
+
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") then
                 part.CanCollide = false
@@ -311,36 +277,30 @@ RunService.Heartbeat:Connect(function(dt)
                 currentTargetCoin = coin
                 coinTargetStartTime = tick()
             else
-                if tick() - coinTargetStartTime > 0.5 then
+                if tick() - coinTargetStartTime > 0.8 then
                     blacklistedCoins[coin] = true
                     currentTargetCoin = nil
                     return
                 end
             end
 
-            -- الطيران تحت الأرض بمسافة 8 ستود وبسرعة 30 (بدون تلي بورت)
+            -- الطيران والانزلاق السلس تحت الأرض بمسافة 8 ستود (بدون تيليبورت فوري)
             local targetPos = Vector3.new(coin.Position.X, coin.Position.Y - UNDER_OFFSET, coin.Position.Z)
-            local delta = targetPos - hrp.Position
-            local moveStep = math.min(delta.Magnitude, FARM_SPEED * dt)
-
-            if delta.Magnitude > 0.05 then
-                hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * moveStep)
-            else
-                hrp.CFrame = CFrame.new(targetPos)
-            end
-
+            local targetCFrame = CFrame.new(targetPos)
+            
+            -- تحريك سلس تدريجي (Lerp) يشبه الطيران الحقيقي
+            hrp.CFrame = hrp.CFrame:Lerp(targetCFrame, FARM_SPEED)
             hrp.AssemblyLinearVelocity = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
 
-            -- إرسال التاتش بواسطة الشخصية الوهمية للعملة
-            triggerFakeTouch(coin, char, hrp)
+            triggerTouch(coin, char, hrp)
         end
     end)
 end)
 
 -- UI SETUP
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AmoChereebUltimateV78"
+ScreenGui.Name = "AmoChereebUltimateV79"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.IgnoreGuiInset = true
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
@@ -389,7 +349,7 @@ local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(1, -50, 1, 0)
 TitleText.Position = UDim2.new(0, 15, 0, 0)
 TitleText.BackgroundTransparency = 1
-TitleText.Text = "⚡ عمو تشريب Hub - v78"
+TitleText.Text = "⚡ عمو تشريب Hub - v79"
 TitleText.TextColor3 = Color3.fromRGB(255, 170, 0)
 TitleText.Font = Enum.Font.GothamBold
 TitleText.TextSize = 15
@@ -493,7 +453,7 @@ local function createToggle(yPos, text, icon, default, callback)
     end)
 end
 
-createToggle(0, "تجميع طيران وهمي (سرعة 30)", "🪙", false, function(st)
+createToggle(0, "تجميع طيران سلس تحت الأرض", "🪙", false, function(st)
     farmActive = st
     if not st then
         cleanupPhysics()
