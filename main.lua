@@ -1,8 +1,10 @@
 --[[
-    عمو تشريب Hub - Mobile v15 (WALK ONLY + REAL FLING)
-    - Walk speed 27 (no fly, no teleport)
-    - Fling murderer: continuous every 0.3s until dead
-    - Reset at 50
+    عمو تشريب Hub - Mobile v16 ULTIMATE
+    - Smart reset (only at 50 with verification)
+    - Real collection (MoveTo + micro CFrame)
+    - Smart fling (repeat until dead)
+    - Escape system (dodge murderer + knife)
+    - Walk speed 27 (no fly)
 --]]
 
 local Players = game:GetService("Players")
@@ -14,7 +16,10 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 
 -- ========== Config ==========
-local walkSpeed = 27  -- سرعة ثابتة 27
+local walkSpeed = 27
+local DANGER_DISTANCE = 6
+local KNIFE_DANGER = 12
+local COLLECT_THRESHOLD = 5
 
 -- ========== States ==========
 local farmActive = false
@@ -22,6 +27,11 @@ local flingMurdererActive = false
 local antiAFKActive = true
 local pendingRespawn = false
 local lastFlingTime = 0
+local flingedThisRound = {}
+local lastResetTime = 0
+local ignoreCoins = {}
+local lastCoinTarget = nil
+local lastCoinTime = 0
 
 -- ========== Anti-AFK ==========
 task.spawn(function()
@@ -36,7 +46,7 @@ task.spawn(function()
     end
 end)
 
--- ========== Speed (fixed 27) ==========
+-- ========== Speed ==========
 local function applySpeed()
     local char = LocalPlayer.Character
     if char then
@@ -50,23 +60,17 @@ end
 
 applySpeed()
 
--- ========== Murderer Detection (comprehensive) ==========
+-- ========== Murderer Detection ==========
 local function getMurderer()
-    -- Method 1: Equipped in character
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
         local char = player.Character
         if char then
-            for _, item in ipairs(char:GetChildren()) do
-                if item:IsA("Tool") and item.Name == "Knife" then return player end
-            end
-            -- Check descendants too
             for _, item in ipairs(char:GetDescendants()) do
                 if item:IsA("Tool") and item.Name == "Knife" then return player end
             end
         end
     end
-    -- Method 2: In Backpack
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
         local bp = player:FindFirstChild("Backpack")
@@ -76,7 +80,6 @@ local function getMurderer()
             end
         end
     end
-    -- Method 3: Knife in workspace
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj:IsA("Tool") and obj.Name == "Knife" then
             local parent = obj.Parent
@@ -86,63 +89,71 @@ local function getMurderer()
             end
         end
     end
-    -- Method 4: Attributes
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player == LocalPlayer then continue end
-        local role = player:GetAttribute("Role") or player:GetAttribute("role")
-        if role and tostring(role):lower():find("murder") then return player end
-    end
     return nil
 end
 
--- ========== REAL Fling (multi-method, continuous) ==========
+local function getMurdererDistance()
+    local murderer = getMurderer()
+    if not murderer or not murderer.Character then return math.huge, nil end
+    local myChar = LocalPlayer.Character
+    if not myChar then return math.huge, murderer end
+    local myHRP = myChar:FindFirstChild("HumanoidRootPart")
+    local murdHRP = murderer.Character:FindFirstChild("HumanoidRootPart")
+    if not myHRP or not murdHRP then return math.huge, murderer end
+    return (myHRP.Position - murdHRP.Position).Magnitude, murderer
+end
+
+local function isThrownKnifeNearby()
+    local myChar = LocalPlayer.Character
+    if not myChar then return false end
+    local myHRP = myChar:FindFirstChild("HumanoidRootPart")
+    if not myHRP then return false end
+    for _, obj in ipairs(workspace:GetChildren()) do
+        if obj:IsA("Tool") and obj.Name == "Knife" then
+            local handle = obj:FindFirstChild("Handle")
+            if handle and handle:IsA("BasePart") then
+                if (myHRP.Position - handle.Position).Magnitude < KNIFE_DANGER then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+-- ========== Fling ==========
 local function flingMurderer(murderer)
     if not murderer then return end
     task.spawn(function()
-        for attempt = 1, 30 do
+        for attempt = 1, 25 do
             local char = murderer.Character
             if not char then break end
             local hrp = char:FindFirstChild("HumanoidRootPart")
             local hum = char:FindFirstChildOfClass("Humanoid")
             if not hrp or not hum or hum.Health <= 0 then break end
 
-            -- Method 1: Velocity fling (spin + fly up)
             pcall(function()
                 local bv = hrp:FindFirstChild("FlingBV") or Instance.new("BodyVelocity", hrp)
                 bv.Name = "FlingBV"
                 bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-                bv.Velocity = Vector3.new(math.random(-5000, 5000), 100000, math.random(-5000, 5000))
+                bv.Velocity = Vector3.new(math.random(-4000, 4000), 90000, math.random(-4000, 4000))
             end)
 
-            -- Method 2: Angular velocity (spin)
             pcall(function()
                 local bav = hrp:FindFirstChild("FlingBAV") or Instance.new("BodyAngularVelocity", hrp)
                 bav.Name = "FlingBAV"
                 bav.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-                bav.AngularVelocity = Vector3.new(99999, 99999, 99999)
+                bav.AngularVelocity = Vector3.new(999999, 999999, 999999)
             end)
 
-            -- Method 3: CFrame teleport to sky
             pcall(function()
-                hrp.CFrame = CFrame.new(
-                    math.random(-2000, 2000),
-                    20000 + (attempt * 2000),
-                    math.random(-2000, 2000)
-                )
+                hrp.CFrame = CFrame.new(math.random(-1500, 1500), 18000 + attempt * 1200, math.random(-1500, 1500))
                 hum.PlatformStand = true
             end)
 
-            -- Method 4: Direct velocity
-            pcall(function()
-                hrp.Velocity = Vector3.new(math.random(-30000, 30000), 100000, math.random(-30000, 30000))
-                hrp.RotVelocity = Vector3.new(math.random(-500, 500), math.random(-500, 500), math.random(-500, 500))
-            end)
-
-            task.wait(0.08)
+            task.wait(0.09)
         end
 
-        -- Cleanup
-        task.wait(0.3)
         pcall(function()
             local hum = murderer.Character and murderer.Character:FindFirstChildOfClass("Humanoid")
             if hum then hum.PlatformStand = false end
@@ -150,17 +161,19 @@ local function flingMurderer(murderer)
     end)
 end
 
--- ========== Continuous Murderer Fling (every 0.3s until dead) ==========
+-- Smart continuous fling (repeat until dead)
 task.spawn(function()
     while true do
-        task.wait(0.3)
+        task.wait(0.2)
         if flingMurdererActive and not pendingRespawn then
             local murderer = getMurderer()
             if murderer and murderer.Character then
                 local hum = murderer.Character:FindFirstChildOfClass("Humanoid")
                 if hum and hum.Health > 0 then
-                    if tick() - lastFlingTime > 1 then
+                    -- First time or repeat every 2 seconds
+                    if not flingedThisRound[murderer.UserId] or (tick() - lastFlingTime > 2) then
                         lastFlingTime = tick()
+                        flingedThisRound[murderer.UserId] = true
                         print("[Fling] Attacking: " .. murderer.Name)
                         flingMurderer(murderer)
                     end
@@ -357,21 +370,18 @@ local FlingMurdererBtn = makeToggle(130, "فلنك القاتل", "💥", false,
     flingMurdererActive = state
     if state then
         lastFlingTime = 0
-        -- Instant fling on activate
+        -- Instant fling attempt
         task.spawn(function()
             task.wait(0.3)
             local murderer = getMurderer()
             if murderer and murderer.Character then
                 local hum = murderer.Character:FindFirstChildOfClass("Humanoid")
                 if hum and hum.Health > 0 then
+                    flingedThisRound[murderer.UserId] = true
                     lastFlingTime = tick()
                     flingMurderer(murderer)
                     print("[INSTANT] Flinged: " .. murderer.Name)
-                else
-                    print("[INSTANT] Murderer dead, waiting for next...")
                 end
-            else
-                print("[INSTANT] No murderer yet, will detect...")
             end
         end)
     end
@@ -438,27 +448,70 @@ local function getHRP()
     return char and char:FindFirstChild("HumanoidRootPart")
 end
 
-local function getNearestCoin()
-    local hrp = getHRP()
-    if not hrp then return nil end
-    local closest, dist = nil, math.huge
+local function getAllCoins()
+    local coins = {}
     for _, map in ipairs(workspace:GetChildren()) do
         if map:FindFirstChild("CoinContainer") then
             for _, coin in ipairs(map.CoinContainer:GetChildren()) do
                 if coin:IsA("BasePart") and coin:FindFirstChild("TouchInterest") then
-                    local d = (hrp.Position - coin.Position).Magnitude
-                    if d < dist then closest, dist = coin, d end
+                    if not ignoreCoins[coin] then
+                        table.insert(coins, coin)
+                    end
                 end
             end
         end
     end
+    return coins
+end
+
+local function getNearestCoin()
+    local hrp = getHRP()
+    if not hrp then return nil, math.huge end
+    local closest, dist = nil, math.huge
+    for _, coin in ipairs(getAllCoins()) do
+        local d = (hrp.Position - coin.Position).Magnitude
+        if d < dist then closest, dist = coin, d end
+    end
     return closest, dist
 end
 
--- ========== Auto Reset ==========
+local function getCoinCount()
+    local mainGui = LocalPlayer.PlayerGui:FindFirstChild("MainGUI")
+    if not mainGui then return 0, 50 end
+    local gameGui = mainGui:FindFirstChild("Game")
+    if not gameGui then return 0, 50 end
+    local coinBags = gameGui:FindFirstChild("CoinBags")
+    if not coinBags then return 0, 50 end
+    for _, bag in ipairs(coinBags:GetDescendants()) do
+        if bag:IsA("TextLabel") and bag.Name == "Coins" then
+            local cur, mx = bag.Text:match("(%d+)/(%d+)")
+            if cur and mx then
+                return tonumber(cur), tonumber(mx)
+            end
+        end
+    end
+    return 0, 50
+end
+
+local function isInRound()
+    local mainGui = LocalPlayer.PlayerGui:FindFirstChild("MainGUI")
+    if not mainGui then return false end
+    local gameGui = mainGui:FindFirstChild("Game")
+    if not gameGui then return false end
+    local timer = gameGui:FindFirstChild("Timer")
+    if timer and timer.Visible then return true end
+    local earnedXP = gameGui:FindFirstChild("EarnedXP")
+    if earnedXP and earnedXP.Visible then return true end
+    return false
+end
+
+-- ========== Reset ==========
 local function doAutoRespawn()
     if pendingRespawn then return end
+    if tick() - lastResetTime < 5 then return end
     pendingRespawn = true
+    lastResetTime = tick()
+    print("[Reset] Triggered")
 
     local char = LocalPlayer.Character
     if char then
@@ -469,14 +522,21 @@ local function doAutoRespawn()
         end
     end
 
-    -- Fling murderer before reset
+    -- Fling murderer BEFORE reset
     if flingMurdererActive then
         local murderer = getMurderer()
         if murderer and murderer.Character then
             local murdHum = murderer.Character:FindFirstChildOfClass("Humanoid")
             if murdHum and murdHum.Health > 0 then
                 flingMurderer(murderer)
-                task.wait(2)
+                -- Wait until dead (max 3 sec)
+                local startWait = tick()
+                while tick() - startWait < 3 do
+                    if not murderer.Character then break end
+                    local h = murderer.Character:FindFirstChildOfClass("Humanoid")
+                    if not h or h.Health <= 0 then break end
+                    task.wait(0.2)
+                end
             end
         end
     end
@@ -489,54 +549,54 @@ local function doAutoRespawn()
     end
     task.wait(3)
     pendingRespawn = false
+    flingedThisRound = {}
+    ignoreCoins = {}
 end
 
--- Reset on 50 (event)
-task.spawn(function()
-    local remotes = ReplicatedStorage:WaitForChild("Remotes", 10)
-    if not remotes then return end
-    local gameplay = remotes:WaitForChild("Gameplay", 5)
-    if not gameplay then return end
-    local cc = gameplay:WaitForChild("CoinCollected", 5)
-    if not cc then return end
-    cc.OnClientEvent:Connect(function(_, current, max)
-        if current and max and current >= max and not pendingRespawn then
-            doAutoRespawn()
-        end
-    end)
-end)
-
--- Reset polling backup
+-- Smart reset (verified + in round)
 task.spawn(function()
     while true do
-        task.wait(0.3)
+        task.wait(0.5)
         if farmActive and not pendingRespawn then
-            local mainGui = LocalPlayer.PlayerGui:FindFirstChild("MainGUI")
-            if mainGui then
-                local gameGui = mainGui:FindFirstChild("Game")
-                if gameGui then
-                    local coinBags = gameGui:FindFirstChild("CoinBags")
-                    if coinBags then
-                        for _, bag in ipairs(coinBags:GetDescendants()) do
-                            if bag:IsA("TextLabel") and bag.Name == "Coins" then
-                                local cur, mx = bag.Text:match("(%d+)/(%d+)")
-                                if cur and mx and tonumber(cur) >= tonumber(mx) then
-                                    doAutoRespawn()
-                                    break
-                                end
-                            end
-                        end
-                    end
+            if isInRound() then
+                local cur, mx = getCoinCount()
+                if mx and mx >= 40 and cur >= mx then
+                    doAutoRespawn()
                 end
             end
         end
     end
 end)
 
--- ========== FARM LOOP (WALK ONLY - 27 SPEED) ==========
+-- ========== Escape System ==========
+local function findEscapeCoin(murderer)
+    local coins = getAllCoins()
+    if #coins == 0 then return nil end
+    local myHRP = getHRP()
+    if not myHRP then return nil end
+    local murdHRP = murderer and murderer.Character and murderer.Character:FindFirstChild("HumanoidRootPart")
+    if not murdHRP then
+        local c = getNearestCoin()
+        return c
+    end
+
+    local bestCoin, bestScore = nil, -math.huge
+    for _, coin in ipairs(coins) do
+        local distFromMurderer = (coin.Position - murdHRP.Position).Magnitude
+        local distFromMe = (coin.Position - myHRP.Position).Magnitude
+        local score = distFromMurderer - (distFromMe * 0.25)
+        if score > bestScore then
+            bestScore = score
+            bestCoin = coin
+        end
+    end
+    return bestCoin
+end
+
+-- ========== FARM LOOP (REAL COLLECTION) ==========
 task.spawn(function()
     while true do
-        task.wait(0.1)
+        task.wait(0.08)
         pcall(function()
             if not farmActive or pendingRespawn then return end
 
@@ -545,83 +605,101 @@ task.spawn(function()
             local hum = char and char:FindFirstChildOfClass("Humanoid")
             if not hrp or not hum or hum.Health <= 0 then return end
 
-            -- Force walk speed 27
             hum.PlatformStand = false
             hum.WalkSpeed = walkSpeed
             hum.JumpPower = 50
 
-            -- Restore collision (for proper collection)
+            -- Restore collision
             for _, part in ipairs(char:GetDescendants()) do
                 if part:IsA("BasePart") then
                     if not part.CanCollide then part.CanCollide = true end
                 end
             end
 
+            -- ========== DANGER CHECK ==========
+            local murdererDist, murderer = getMurdererDistance()
+            local knifeDanger = isThrownKnifeNearby()
+
+            if murdererDist < DANGER_DISTANCE or knifeDanger then
+                -- 🚨 ESCAPE
+                local escapeCoin = findEscapeCoin(murderer)
+                if escapeCoin then
+                    hum:MoveTo(escapeCoin.Position)
+                    return
+                end
+            end
+
+            -- ========== COLLECT ==========
             local coin, dist = getNearestCoin()
             if not coin then return end
 
-            -- Walk to coin (Humanoid:MoveTo = natural walking)
+            -- Track coin (if same for > 2 sec, ignore it)
+            if lastCoinTarget == coin then
+                if tick() - lastCoinTime > 2 then
+                    ignoreCoins[coin] = true
+                    lastCoinTarget = nil
+                    return
+                end
+            else
+                lastCoinTarget = coin
+                lastCoinTime = tick()
+            end
+
+            -- Walk towards coin
             hum:MoveTo(coin.Position)
 
-            -- Extra firetouchinterest when close (backup)
-            if dist < 5 then
-                pcall(function()
-                    firetouchinterest(hrp, coin, 0)
-                    firetouchinterest(hrp, coin, 1)
-                end)
+            -- Close: micro-step + touch
+            if dist < COLLECT_THRESHOLD then
+                local dir = coin.Position - hrp.Position
+                if dir.Magnitude > 0.1 then
+                    -- Small safe step (0.7 stud per frame = 42/sec, safe)
+                    local step = math.min(0.7, dir.Magnitude)
+                    hrp.CFrame = CFrame.new(hrp.Position + dir.Unit * step)
+                end
+
+                -- Fire touch from ALL body parts
+                for _, part in ipairs(char:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        pcall(function()
+                            firetouchinterest(part, coin, 0)
+                            firetouchinterest(part, coin, 1)
+                        end)
+                    end
+                end
             end
         end)
     end
 end)
 
+-- Speed enforcement
+RunService.Heartbeat:Connect(function()
+    pcall(function()
+        local char = LocalPlayer.Character
+        if char and not pendingRespawn then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum and hum.WalkSpeed ~= walkSpeed then
+                hum.WalkSpeed = walkSpeed
+            end
+        end
+    end)
+end)
+
 -- Coin info
 local function updateCoinInfo()
-    local count = 0
-    local hrp = getHRP()
-    if hrp then
-        for _, map in ipairs(workspace:GetChildren()) do
-            if map:FindFirstChild("CoinContainer") then
-                for _, coin in ipairs(map.CoinContainer:GetChildren()) do
-                    if coin:IsA("BasePart") and coin:FindFirstChild("TouchInterest") then
-                        count = count + 1
-                    end
-                end
-            end
-        end
-    end
-    local bagTxt = "0"
-    local mainGui = LocalPlayer.PlayerGui:FindFirstChild("MainGUI")
-    if mainGui and mainGui:FindFirstChild("Game") and mainGui.Game:FindFirstChild("CoinBags") then
-        for _, bag in ipairs(mainGui.Game.CoinBags:GetDescendants()) do
-            if bag:IsA("TextLabel") and bag.Name == "Coins" then
-                local cur = bag.Text:match("(%d+)")
-                if cur and tonumber(cur) > 0 then bagTxt = cur end
-            end
-        end
-    end
-    CoinInfo.Text = "🪙 " .. bagTxt .. " / 50  •  الخريطة: " .. count
+    local cur, mx = getCoinCount()
+    local count = #getAllCoins()
+    CoinInfo.Text = "🪙 " .. cur .. " / " .. mx .. "  •  الخريطة: " .. count
 end
 
 RunService.Heartbeat:Connect(function()
     pcall(updateCoinInfo)
 end)
 
--- Enforce walk speed 27 continuously
-RunService.Heartbeat:Connect(function()
-    pcall(function()
-        local char = LocalPlayer.Character
-        if char then
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if hum and not pendingRespawn then
-                if hum.WalkSpeed ~= walkSpeed then
-                    hum.WalkSpeed = walkSpeed
-                end
-            end
-        end
-    end)
-end)
-
+-- Respawn
 LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(0.5)
     applySpeed()
+    flingedThisRound = {}
+    ignoreCoins = {}
+    lastCoinTarget = nil
 end)
