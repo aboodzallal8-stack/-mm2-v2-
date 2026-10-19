@@ -1,9 +1,9 @@
 --[[
-    عمو تشريب Hub - Mobile v77 REAL FLY & SMOOTH FARM FIX
-    ======================================================
-    - Smooth Flying Physics with Swimming State Override
-    - Underground Farm (8 Studs) at Speed 30
-    - Active Coin Collection Logic & Auto-Reset at 50 Coins
+    عمو تشريب Hub - Mobile v78 FAKE CHARACTER & UNDERGROUND FLY
+    ============================================================
+    - Underground Smooth Flight (8 Studs Offset) at Speed 30
+    - Fake Character / Touch Proxy Mechanism (No Teleporting)
+    - Auto Character Reset at Max 50 Coins
 --]]
 
 local Players = game:GetService("Players")
@@ -33,11 +33,13 @@ local antiAFKActive = true
 
 local collectedCoinsCount = 0
 local coinsCache = {}
-local lastCacheUpdate = 0
+lastCacheUpdate = 0
 local currentTargetCoin = nil
 local coinTargetStartTime = 0
 local blacklistedCoins = {}
 local hasResetForMax = false
+
+local fakeCharContainer = nil
 
 local function safeParent(instance, parent)
     if instance and parent then
@@ -182,6 +184,26 @@ local function getSmartNearestCoin()
     return closestCoin
 end
 
+-- FAKE CHARACTER / PROXY CREATION
+local function getOrCreateFakeTouchPart(char)
+    if fakeCharContainer and fakeCharContainer.Parent then
+        return fakeCharContainer
+    end
+
+    pcall(function()
+        local part = Instance.new("Part")
+        part.Name = "FakeTouchProxy"
+        part.Size = Vector3.new(2, 2, 2)
+        part.Transparency = 1
+        part.CanCollide = false
+        part.Anchored = true
+        part.Parent = char
+        fakeCharContainer = part
+    end)
+
+    return fakeCharContainer
+end
+
 local function cleanupPhysics()
     pcall(function()
         local char = LocalPlayer.Character
@@ -199,6 +221,11 @@ local function cleanupPhysics()
             hum.PlatformStand = false
             hum:ChangeState(Enum.HumanoidStateType.GettingUp)
         end
+
+        if fakeCharContainer then
+            fakeCharContainer:Destroy()
+            fakeCharContainer = nil
+        end
     end)
 end
 
@@ -209,25 +236,26 @@ LocalPlayer.CharacterAdded:Connect(function()
     hasResetForMax = false
 end)
 
-local function triggerUndergroundTouch(coin, char, hrp)
+-- TOUCH COLLECTION VIA FAKE CHARACTER / REAL TOUCH INTEREST
+local function triggerFakeTouch(coin, char, hrp)
     if not coin or not coin.Parent or not hrp then
         return
     end
 
     pcall(function()
+        local fakePart = getOrCreateFakeTouchPart(char)
+        if fakePart then
+            fakePart.Position = coin.Position
+            firetouchinterest(fakePart, coin, 0)
+            firetouchinterest(fakePart, coin, 1)
+        end
+
         firetouchinterest(hrp, coin, 0)
         firetouchinterest(hrp, coin, 1)
-
-        for _, part in ipairs(char:GetChildren()) do
-            if part:IsA("BasePart") then
-                firetouchinterest(part, coin, 0)
-                firetouchinterest(part, coin, 1)
-            end
-        end
     end)
 end
 
--- MAIN FARM LOOP
+-- MAIN FARM LOOP (UNDERGROUND FLY & FAKE PROXY)
 RunService.Heartbeat:Connect(function(dt)
     pcall(function()
         if not farmActive then return end
@@ -262,7 +290,7 @@ RunService.Heartbeat:Connect(function(dt)
             return
         end
 
-        -- تفعيل الطيران السلس عبر تغيير الحالة وإلغاء التصادم
+        -- تفعيل الطيران الحر السلس تحت الأرض
         hum:ChangeState(Enum.HumanoidStateType.Swimming)
         
         for _, part in ipairs(char:GetDescendants()) do
@@ -290,7 +318,7 @@ RunService.Heartbeat:Connect(function(dt)
                 end
             end
 
-            -- حركة الطيران والتجمع تحت الأرض بمسافة 8 ستود وبسرعة 30
+            -- الطيران تحت الأرض بمسافة 8 ستود وبسرعة 30 (بدون تلي بورت)
             local targetPos = Vector3.new(coin.Position.X, coin.Position.Y - UNDER_OFFSET, coin.Position.Z)
             local delta = targetPos - hrp.Position
             local moveStep = math.min(delta.Magnitude, FARM_SPEED * dt)
@@ -304,14 +332,15 @@ RunService.Heartbeat:Connect(function(dt)
             hrp.AssemblyLinearVelocity = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
 
-            triggerUndergroundTouch(coin, char, hrp)
+            -- إرسال التاتش بواسطة الشخصية الوهمية للعملة
+            triggerFakeTouch(coin, char, hrp)
         end
     end)
 end)
 
 -- UI SETUP
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AmoChereebUltimateV77"
+ScreenGui.Name = "AmoChereebUltimateV78"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.IgnoreGuiInset = true
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
@@ -360,7 +389,7 @@ local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(1, -50, 1, 0)
 TitleText.Position = UDim2.new(0, 15, 0, 0)
 TitleText.BackgroundTransparency = 1
-TitleText.Text = "⚡ عمو تشريب Hub - v77"
+TitleText.Text = "⚡ عمو تشريب Hub - v78"
 TitleText.TextColor3 = Color3.fromRGB(255, 170, 0)
 TitleText.Font = Enum.Font.GothamBold
 TitleText.TextSize = 15
@@ -464,7 +493,7 @@ local function createToggle(yPos, text, icon, default, callback)
     end)
 end
 
-createToggle(0, "تجميع تحت الأرض (سرعة 30)", "🪙", false, function(st)
+createToggle(0, "تجميع طيران وهمي (سرعة 30)", "🪙", false, function(st)
     farmActive = st
     if not st then
         cleanupPhysics()
