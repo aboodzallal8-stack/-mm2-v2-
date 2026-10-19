@@ -1,8 +1,8 @@
 --[[
-    عمو تشريب Hub - Mobile v5
-    - Farm by walking (no teleport, no kick)
-    - Murderer fling ONLY happens when bag reaches 50 (at reset)
-    - If murderer detected at 50 coins -> fling them -> reset -> win
+    عمو تشريب Hub - Mobile v6
+    - Fly to coins (BodyVelocity) + wall clip (noclip) - NO teleport
+    - Murderer fling ONLY at 50 coins
+    - Farm persists after death
     - Clean GUI
 --]]
 
@@ -18,12 +18,15 @@ local LocalPlayer = Players.LocalPlayer
 -- ========== Config ==========
 local CoinLimit = 50
 local walkSpeed = 27
+local FLY_SPEED = 65 -- سرعة الطيران (65 ستود/ث - آمنة من الطرد)
 
 -- ========== States ==========
 local farmActive = false
-local flingMurdererOnReset = false -- يصير الفلنك فقط عند 50 كوين
+local flingMurdererOnReset = false
 local antiAFKActive = true
 local pendingRespawn = false
+local flyBV = nil
+local noclipEnabled = false
 
 -- ========== Anti-AFK ==========
 task.spawn(function()
@@ -61,18 +64,28 @@ RunService.Heartbeat:Connect(function()
     end)
 end)
 
+-- ========== Noclip (اختراق الجدران) ==========
+local function setNoclip(state)
+    if noclipEnabled == state then return end
+    noclipEnabled = state
+    local char = LocalPlayer.Character
+    if char then
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") then
+                pcall(function() part.CanCollide = not state end)
+            end
+        end
+    end
+end
+
 -- ========== Murderer Detection ==========
 local function getMurderer()
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
-        
-        -- 1) Knife in backpack (most reliable)
         local bp = player:FindFirstChild("Backpack")
         if bp and bp:FindFirstChild("Knife") then
             return player
         end
-        
-        -- 2) Knife equipped in character
         local char = player.Character
         if char then
             for _, tool in ipairs(char:GetChildren()) do
@@ -121,7 +134,6 @@ ScreenGui.Name = "AmoChereebMobile"
 ScreenGui.Parent = CoreGui
 ScreenGui.ResetOnSpawn = false
 
--- Float button
 local FloatBtn = Instance.new("TextButton")
 FloatBtn.Size = UDim2.new(0, 65, 0, 65)
 FloatBtn.Position = UDim2.new(1, -85, 0.45, -32)
@@ -148,7 +160,6 @@ task.spawn(function()
     end
 end)
 
--- Main panel
 local MainFrame = Instance.new("Frame")
 MainFrame.Size = UDim2.new(0, 340, 0, 350)
 MainFrame.Position = UDim2.new(0.5, -170, 0.5, -175)
@@ -160,7 +171,6 @@ MainFrame.ClipsDescendants = true
 MainFrame.Parent = ScreenGui
 Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 20)
 
--- Gold border
 local GoldBorder = Instance.new("Frame")
 GoldBorder.Size = UDim2.new(1, 6, 1, 6)
 GoldBorder.Position = UDim2.new(0, -3, 0, -3)
@@ -182,7 +192,6 @@ task.spawn(function()
     end
 end)
 
--- Title bar
 local TitleBar = Instance.new("Frame")
 TitleBar.Size = UDim2.new(1, 0, 0, 44)
 TitleBar.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
@@ -213,7 +222,6 @@ CloseBtn.Parent = TitleBar
 Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 17)
 CloseBtn.MouseButton1Click:Connect(function() MainFrame.Visible = false end)
 
--- Drag
 local function makeDraggable(handle, target)
     local dragging = false
     local dragStart, startPos
@@ -238,7 +246,6 @@ local function makeDraggable(handle, target)
 end
 makeDraggable(TitleBar, MainFrame)
 
--- Toggle
 local function makeToggle(yPos, text, icon, defaultState, callback)
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(1, -24, 0, 56)
@@ -295,7 +302,6 @@ local function makeToggle(yPos, text, icon, defaultState, callback)
     return btn
 end
 
--- Speed setting
 local SpeedLabel = Instance.new("TextLabel")
 SpeedLabel.Size = UDim2.new(0, 170, 0, 34)
 SpeedLabel.Position = UDim2.new(0, 12, 0, 56)
@@ -330,7 +336,6 @@ SpeedBox.FocusLost:Connect(function()
     end
 end)
 
--- Toggles
 local FarmBtn = makeToggle(100, "جمع تلقائي", "🌾", false, function(state)
     farmActive = state
 end)
@@ -343,7 +348,6 @@ local AFKBtn = makeToggle(232, "مكافحة الطرد", "⏳", true, function(
     antiAFKActive = state
 end)
 
--- Coin info
 local CoinPanel = Instance.new("Frame")
 CoinPanel.Size = UDim2.new(1, -24, 0, 44)
 CoinPanel.Position = UDim2.new(0, 12, 0, 296)
@@ -363,7 +367,6 @@ CoinInfo.Font = Enum.Font.GothamBold
 CoinInfo.TextSize = 15
 CoinInfo.Parent = CoinPanel
 
--- Float drag
 local floatDragging = false
 local floatDragStart, floatStartPos
 local floatMoved = false
@@ -419,26 +422,36 @@ local function getNearestCoin()
     return closest, dist
 end
 
--- ✅ Auto Reset - Murderer fling happens HERE ONLY
+-- Stop fly (cleanup)
+local function stopFly()
+    if flyBV then
+        pcall(function() flyBV:Destroy() end)
+        flyBV = nil
+    end
+    setNoclip(false)
+    local hrp = getHRP()
+    if hrp then hrp.Velocity = Vector3.zero end
+end
+
+-- Auto reset (with murderer fling at 50)
 local function doAutoRespawn()
     if pendingRespawn then return end
     pendingRespawn = true
 
-    -- ⚡ لو الزر مفعل: نطير القاتل قبل الريست
+    stopFly()
+
     if flingMurdererOnReset then
         local murderer = getMurderer()
         if murderer and murderer.Character then
             local murdChar = murderer.Character
             local murdHum = murdChar:FindFirstChildOfClass("Humanoid")
             if murdHum and murdHum.Health > 0 then
-                -- نطير القاتل
                 killPlayer(murderer)
-                task.wait(1.5) -- ننتظر شوي عشان يموت
+                task.wait(1.5)
             end
         end
     end
 
-    -- ثم نريست أنفسنا
     local char = LocalPlayer.Character
     if char then
         local hum = char:FindFirstChildOfClass("Humanoid")
@@ -454,7 +467,7 @@ local function doAutoRespawn()
     end
 end
 
--- Reset detection (event-based)
+-- Reset detection (event)
 task.spawn(function()
     local remotes = ReplicatedStorage:WaitForChild("Remotes", 10)
     if not remotes then return end
@@ -469,7 +482,7 @@ task.spawn(function()
     end)
 end)
 
--- Polling backup (in case event doesn't fire)
+-- Polling backup
 task.spawn(function()
     while true do
         task.wait(0.3)
@@ -496,10 +509,10 @@ task.spawn(function()
     end
 end)
 
--- Farm loop (WALK ONLY - no teleport)
+-- ========== FLY FARM LOOP (طيران + اختراق جدران) ==========
 task.spawn(function()
     while true do
-        task.wait(0.1)
+        task.wait(0.05)
         pcall(function()
             if farmActive and not pendingRespawn then
                 local coin, dist = getNearestCoin()
@@ -508,19 +521,38 @@ task.spawn(function()
                     local hrp = char and char:FindFirstChild("HumanoidRootPart")
                     local hum = char and char:FindFirstChildOfClass("Humanoid")
                     if hrp and hum and hum.Health > 0 then
+                        -- تفعيل اختراق الجدران
+                        setNoclip(true)
+
+                        -- إنشاء BodyVelocity للطيران إذا ما موجود
+                        if not flyBV or flyBV.Parent ~= hrp then
+                            if flyBV then pcall(function() flyBV:Destroy() end) end
+                            flyBV = Instance.new("BodyVelocity")
+                            flyBV.Name = "FarmFly"
+                            flyBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+                            flyBV.Parent = hrp
+                        end
+
                         if dist < 6 then
-                            -- نجبر الجمع بدون تيليبورت
+                            -- قريب من الكوين: نوقف الطيران ونجمع
+                            flyBV.Velocity = Vector3.zero
                             pcall(function()
                                 firetouchinterest(hrp, coin, 0)
                                 task.wait(0.05)
                                 firetouchinterest(hrp, coin, 1)
                             end)
                         else
-                            -- يمشي عادي
-                            hum:MoveTo(coin.Position)
+                            -- نطير نحو الكوين (بدون تيليبورت!)
+                            local dir = (coin.Position - hrp.Position).Unit
+                            flyBV.Velocity = dir * FLY_SPEED
+                            -- نثبت الشخصية عشان ما تسقط
+                            hum.PlatformStand = false
                         end
                     end
                 end
+            else
+                -- الفارم مو شغال: نوقف الطيران ونرجع طبيعي
+                stopFly()
             end
         end)
     end
