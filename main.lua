@@ -1,28 +1,28 @@
 --[[
     عمو تشريب Hub - Mobile v70 FINAL ROBUST FIX
     ============================================
-    - Full Clean & Fixed Execution Structure
-    - Underground Farm (8 Studs) at Speed 30
-    - Realtime Coin Counter (Max 50) & Custom Icon
+    - Works when LocalPlayer is not ready yet
+    - Searches all workspace coin parts instead of only CoinContainer/Coins
+    - More stable UI and farm logic
 --]]
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
 local VirtualUser = game:GetService("VirtualUser")
 local CoreGui = game:GetService("CoreGui")
 
--- Ensure LocalPlayer is available (fix for nil LocalPlayer runtime errors)
-local LocalPlayer = Players.LocalPlayer
-if not LocalPlayer then
-    repeat
-        task.wait()
-        LocalPlayer = Players.LocalPlayer
-    until LocalPlayer
+if not game:IsLoaded() then
+    game.Loaded:Wait()
 end
 
--- CONFIGURATION
+local LocalPlayer = Players.LocalPlayer
+while not LocalPlayer do
+    task.wait(0.1)
+    LocalPlayer = Players.LocalPlayer
+end
+
+-- CONFIG
 local FARM_SPEED = 30
 local UNDER_OFFSET = 8
 local COIN_MAX_LIMIT = 50
@@ -39,57 +39,115 @@ local currentTargetCoin = nil
 local coinTargetStartTime = 0
 local blacklistedCoins = {}
 
--- ANTI-AFK SYSTEM
+local function safeParent(instance, parent)
+    if instance and parent then
+        pcall(function()
+            instance.Parent = parent
+        end)
+    end
+end
+
+-- ANTI-AFK
 task.spawn(function()
     while true do
         if antiAFKActive then
             pcall(function()
-                VirtualUser:CaptureController()
-                VirtualUser:ClickButton2(Vector2.new())
+                if VirtualUser then
+                    VirtualUser:CaptureController()
+                    VirtualUser:ClickButton2(Vector2.new())
+                end
             end)
         end
-        task.wait(50)
+        task.wait(30)
     end
 end)
 
--- SAFE COIN FINDER
+-- SAFE COIN SCAN
+local function isCoinPart(part)
+    if not part or not part:IsA("BasePart") then
+        return false
+    end
+
+    local name = (part.Name or ""):lower()
+    local parentName = (part.Parent and part.Parent.Name or ""):lower()
+
+    if name:find("coin") or parentName:find("coin") then
+        return true
+    end
+
+    return false
+end
+
 local function getValidCoins()
-    if tick() - lastCacheUpdate < 0.2 then return coinsCache end
+    if tick() - lastCacheUpdate < 0.15 then
+        return coinsCache
+    end
+
     lastCacheUpdate = tick()
     coinsCache = {}
-    
+
+    local seen = {}
+
+    local function addPart(part)
+        if not part or not part:IsA("BasePart") then
+            return
+        end
+        if seen[part] then
+            return
+        end
+        if part.Parent and blacklistedCoins[part] then
+            return
+        end
+        if isCoinPart(part) then
+            table.insert(coinsCache, part)
+            seen[part] = true
+        end
+    end
+
+    -- Search all workspace descendants
     pcall(function()
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj and obj:IsA("BasePart") then
+                addPart(obj)
+            end
+        end
+
+        -- Also scan known containers
         for _, map in ipairs(workspace:GetChildren()) do
             if map and map.Name ~= "Lobby" then
                 local container = map:FindFirstChild("CoinContainer") or map:FindFirstChild("Coins")
                 if container then
-                    for _, coin in ipairs(container:GetChildren()) do
-                        if coin and coin:IsA("BasePart") and coin.Parent and not blacklistedCoins[coin] then
-                            table.insert(coinsCache, coin)
+                    for _, child in ipairs(container:GetDescendants()) do
+                        if child and child:IsA("BasePart") then
+                            addPart(child)
                         end
                     end
                 end
             end
         end
     end)
+
     return coinsCache
 end
 
 local function getSmartNearestCoin()
     local char = LocalPlayer.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return nil end
-    
+    if not hrp then
+        return nil
+    end
+
     local allCoins = getValidCoins()
-    if #allCoins == 0 then return nil end
+    if #allCoins == 0 then
+        return nil
+    end
 
     local closestCoin = nil
     local shortestDistance = math.huge
     local hrpPos = hrp.Position
 
-    for i = 1, #allCoins do
-        local coin = allCoins[i]
-        if coin and coin.Parent then
+    for _, coin in ipairs(allCoins) do
+        if coin and coin.Parent and coin.Parent ~= nil then
             local dist = (hrpPos - coin.Position).Magnitude
             if dist < shortestDistance then
                 shortestDistance = dist
@@ -97,39 +155,49 @@ local function getSmartNearestCoin()
             end
         end
     end
+
     return closestCoin
 end
 
 local function getGameCoinCount()
-    local success, count = pcall(function()
+    local success, result = pcall(function()
         local mainGui = LocalPlayer.PlayerGui:FindFirstChild("MainGUI")
         if not mainGui then return 0 end
+
         local gameGui = mainGui:FindFirstChild("Game")
         if not gameGui then return 0 end
+
         local coinBags = gameGui:FindFirstChild("CoinBags")
         if not coinBags then return 0 end
-        
+
         for _, bag in ipairs(coinBags:GetDescendants()) do
             if bag:IsA("TextLabel") and bag.Name == "Coins" then
-                local cur = bag.Text:match("(%d+)")
-                if cur then return tonumber(cur) end
+                local num = bag.Text:match("(%d+)")
+                if num then
+                    return tonumber(num)
+                end
             end
         end
+
         return 0
     end)
-    return success and count or 0
+
+    return success and result or 0
 end
 
 local function cleanupPhysics()
     pcall(function()
         local char = LocalPlayer.Character
         if not char then return end
+
         local hrp = char:FindFirstChild("HumanoidRootPart")
         local hum = char:FindFirstChildOfClass("Humanoid")
+
         if hrp then
             hrp.AssemblyLinearVelocity = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
         end
+
         if hum then
             hum.PlatformStand = false
         end
@@ -143,10 +211,14 @@ LocalPlayer.CharacterAdded:Connect(function()
 end)
 
 local function triggerUndergroundTouch(coin, char, hrp)
-    if not coin or not coin.Parent or not hrp then return end
+    if not coin or not coin.Parent or not hrp then
+        return
+    end
+
     pcall(function()
         firetouchinterest(hrp, coin, 0)
         firetouchinterest(hrp, coin, 1)
+
         for _, part in ipairs(char:GetChildren()) do
             if part:IsA("BasePart") then
                 firetouchinterest(part, coin, 0)
@@ -156,7 +228,7 @@ local function triggerUndergroundTouch(coin, char, hrp)
     end)
 end
 
--- MAIN FARM LOOP
+-- FARM LOOP
 RunService.Heartbeat:Connect(function(dt)
     pcall(function()
         if not farmActive then return end
@@ -164,21 +236,26 @@ RunService.Heartbeat:Connect(function(dt)
         local char = LocalPlayer.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if not hrp or not hum or hum.Health <= 0 then return end
+
+        if not hrp or not hum or hum.Health <= 0 then
+            return
+        end
 
         local allCoins = getValidCoins()
         if #allCoins == 0 then
-            cleanupPhysics()
             blacklistedCoins = {}
             currentTargetCoin = nil
+            cleanupPhysics()
             return
         end
 
         hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
         hum.PlatformStand = true
-        
+
         for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then part.CanCollide = false end
+            if part:IsA("BasePart") then
+                part.CanCollide = false
+            end
         end
 
         collectedCoinsCount = getGameCoinCount()
@@ -199,13 +276,13 @@ RunService.Heartbeat:Connect(function(dt)
             local targetPos = Vector3.new(coin.Position.X, coin.Position.Y - UNDER_OFFSET, coin.Position.Z)
             local delta = targetPos - hrp.Position
             local moveStep = math.min(delta.Magnitude, FARM_SPEED * dt)
-            
+
             if delta.Magnitude > 0.05 then
                 hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * moveStep)
             else
                 hrp.CFrame = CFrame.new(targetPos)
             end
-            
+
             hrp.AssemblyLinearVelocity = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
 
@@ -214,15 +291,12 @@ RunService.Heartbeat:Connect(function(dt)
     end)
 end)
 
--- UI INTERFACE SETUP
+-- UI
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "AmoChereebUltimateV70"
 ScreenGui.ResetOnSpawn = false
-
--- Safely parent ScreenGui (some environments block direct CoreGui parenting)
-pcall(function()
-    ScreenGui.Parent = CoreGui
-end)
+ScreenGui.IgnoreGuiInset = true
+safeParent(ScreenGui, CoreGui)
 
 local FloatBtn = Instance.new("ImageButton")
 FloatBtn.Size = UDim2.new(0, 70, 0, 70)
