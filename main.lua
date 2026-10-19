@@ -13,7 +13,14 @@ local UserInputService = game:GetService("UserInputService")
 local VirtualUser = game:GetService("VirtualUser")
 local CoreGui = game:GetService("CoreGui")
 
+-- Ensure LocalPlayer is available (fix for nil LocalPlayer runtime errors)
 local LocalPlayer = Players.LocalPlayer
+if not LocalPlayer then
+    repeat
+        task.wait()
+        LocalPlayer = Players.LocalPlayer
+    until LocalPlayer
+end
 
 -- CONFIGURATION
 local FARM_SPEED = 30
@@ -210,8 +217,12 @@ end)
 -- UI INTERFACE SETUP
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "AmoChereebUltimateV70"
-ScreenGui.Parent = CoreGui
 ScreenGui.ResetOnSpawn = false
+
+-- Safely parent ScreenGui (some environments block direct CoreGui parenting)
+pcall(function()
+    ScreenGui.Parent = CoreGui
+end)
 
 local FloatBtn = Instance.new("ImageButton")
 FloatBtn.Size = UDim2.new(0, 70, 0, 70)
