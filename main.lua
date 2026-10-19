@@ -1,10 +1,10 @@
 --[[
-    عمو تشريب Hub - Mobile v35 FAST
-    =================================
-    - No stop / no descent
-    - Multi-collect: up to 4 coins at once from 15 studs
+    عمو تشريب Hub - Mobile v36 FORCE TOUCH
+    ========================================
+    - Force-touch trick: invisible part welded to HRP at coin position
+    - Collects 4 coins at once from far away
+    - No teleport, no stop, no descent
     - 3-phase scan → farm
-    - All features preserved
 --]]
 
 local Players = game:GetService("Players")
@@ -22,9 +22,9 @@ local LocalPlayer = Players.LocalPlayer
 local walkSpeed = 15
 local FLY_SPEED = 15
 local HOVER_HEIGHT = 2
-local COLLECT_RANGE = 15       -- ✅ مسافة الجمع (من بعيد)
-local MULTI_COLLECT = 4        -- ✅ عدد الكوينز في المرة
-local MAX_ATTEMPTS = 3         -- محاولات قبل تجاهل
+local COLLECT_RANGE = 40        -- مدى الكشف (كبير)
+local MULTI_COLLECT = 4         -- يجمع 4 مرة وحدة
+local COLLECT_COOLDOWN = 0.05   -- كل 0.05 ثانية ياخذ دفعة
 local DANGER_DIST = 15
 local KNIFE_DANGER = 20
 local COIN_LIMIT = 50
@@ -51,9 +51,10 @@ local sheriffKillInProgress = false
 local activelyFlinging = {}
 local escapeTarget = nil
 local escapeUntil = 0
+local lastCollectTime = 0
 
--- Phase system
-local phase = "idle"  -- idle / scanning / farming
+-- Phase
+local phase = "idle"
 local scanStart = 0
 
 -- ═══════════════════════════════════════
@@ -345,7 +346,6 @@ local function getAllCoins()
     return coins
 end
 
--- ✅ NEW: get multiple coins in range
 local function getCoinsInRange(pos, radius, maxCount)
     local coins = getAllCoins()
     local list = {}
@@ -403,6 +403,70 @@ local function getUICoinCount()
 end
 
 -- ═══════════════════════════════════════
+-- ⭐ FORCE TOUCH (KEY INNOVATION)
+-- ═══════════════════════════════════════
+local function forceTouchCoin(coin, char, hrp)
+    if not coin or not coin.Parent or not char or not hrp then return end
+    if not coin:IsDescendantOf(workspace) then return end
+
+    -- Create invisible part AT the coin's position
+    local touchPart = Instance.new("Part")
+    touchPart.Name = "ForceTouchPart"
+    touchPart.Size = Vector3.new(6, 6, 6)  -- كبير كفاية ليلمس
+    touchPart.CanCollide = false
+    touchPart.CanTouch = true
+    touchPart.CanQuery = false
+    touchPart.Transparency = 1
+    touchPart.Massless = true
+    touchPart.Anchored = false
+    touchPart.Parent = char  -- جزء من الشخصية (مهم!)
+
+    -- Position it at the coin
+    touchPart.CFrame = coin.CFrame
+
+    -- Weld to HRP (so it stays at coin position, follows character)
+    local weld = Instance.new("WeldConstraint")
+    weld.Part0 = touchPart
+    weld.Part1 = hrp
+    weld.Parent = touchPart
+
+    -- Fire touch from this part to coin
+    pcall(function()
+        firetouchinterest(touchPart, coin, 0)
+    end)
+    pcall(function()
+        firetouchinterest(touchPart, coin, 1)
+    end)
+
+    -- Also fire touch with HRP directly (backup)
+    pcall(function()
+        firetouchinterest(hrp, coin, 0)
+    end)
+    pcall(function()
+        firetouchinterest(hrp, coin, 1)
+    end)
+
+    -- Also fire from all body parts (backup)
+    for _, part in ipairs(char:GetChildren()) do
+        if part:IsA("BasePart") and part ~= touchPart and part ~= hrp then
+            pcall(function()
+                firetouchinterest(part, coin, 0)
+            end)
+            pcall(function()
+                firetouchinterest(part, coin, 1)
+            end)
+        end
+    end
+
+    -- Cleanup after 0.15s (enough time for server to register)
+    task.delay(0.15, function()
+        if touchPart and touchPart.Parent then
+            touchPart:Destroy()
+        end
+    end)
+end
+
+-- ═══════════════════════════════════════
 -- HANDLE 50
 -- ═══════════════════════════════════════
 local function handle50Coins()
@@ -451,7 +515,7 @@ local function handle50Coins()
 end
 
 -- ═══════════════════════════════════════
--- FARM LOOP (MULTI-COLLECT, no stop, no descent)
+-- FARM LOOP (force-touch multi-collect)
 -- ═══════════════════════════════════════
 RunService.Heartbeat:Connect(function()
     pcall(function()
@@ -462,10 +526,9 @@ RunService.Heartbeat:Connect(function()
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         if not hrp or not hum or hum.Health <= 0 then return end
 
-        -- Phase: scanning
+        -- Scanning phase
         if phase == "scanning" then
             if tick() - scanStart < SCAN_DURATION then
-                -- Fling murderer if detected during scan
                 if cachedMurderer and cachedMurderer.Character 
                    and not activelyFlinging[tostring(cachedMurderer.UserId)] then
                     flingPlayer(cachedMurderer)
@@ -491,7 +554,6 @@ RunService.Heartbeat:Connect(function()
             return
         end
 
-        -- Reset detection
         if lastCoinCount == 0 and #allCoins > 5 then
             farmStartedAt = tick()
             stuckCoins = {}
@@ -500,14 +562,14 @@ RunService.Heartbeat:Connect(function()
         end
         lastCoinCount = #allCoins
 
-        -- 50-coin check
+        -- 50 check
         local uiCur, uiMax = getUICoinCount()
         if uiMax >= 40 and uiCur >= uiMax and tick() - farmStartedAt > FARM_MIN_TIME then
             handle50Coins()
             return
         end
 
-        -- Escape check
+        -- Escape
         local danger = nil
         if cachedMurderer and cachedMurderer.Character then
             local mHRP = cachedMurderer.Character:FindFirstChild("HumanoidRootPart")
@@ -534,7 +596,7 @@ RunService.Heartbeat:Connect(function()
             end
         end
 
-        -- ═══ ALWAYS FLY (no stop, no descent) ═══
+        -- Always fly
         hum.PlatformStand = true
         hum.WalkSpeed = 0
         hum.JumpPower = 0
@@ -546,35 +608,30 @@ RunService.Heartbeat:Connect(function()
             end
         end
 
-        -- ═══ MULTI-COLLECT: grab up to 4 coins in 15 studs ═══
-        local nearby = getCoinsInRange(hrp.Position, COLLECT_RANGE, MULTI_COLLECT)
-        if #nearby > 0 then
+        -- ═══ FORCE TOUCH (collects from far) ═══
+        if tick() - lastCollectTime > COLLECT_COOLDOWN then
+            lastCollectTime = tick()
+            local nearby = getCoinsInRange(hrp.Position, COLLECT_RANGE, MULTI_COLLECT)
             for _, coin in ipairs(nearby) do
-                -- Fire touch from all parts
-                for _, part in ipairs(char:GetDescendants()) do
-                    if part:IsA("BasePart") then
-                        pcall(function() firetouchinterest(part, coin, 0) end)
-                        pcall(function() firetouchinterest(part, coin, 1) end)
-                    end
-                end
-                pcall(function() firetouchinterest(hrp, coin, 0) end)
-                pcall(function() firetouchinterest(hrp, coin, 1) end)
-
+                forceTouchCoin(coin, char, hrp)
                 -- Track attempts
                 coinAttempts[coin] = (coinAttempts[coin] or 0) + 1
-                if coinAttempts[coin] > MAX_ATTEMPTS then
+                if coinAttempts[coin] > 5 then
                     stuckCoins[coin] = true
                 end
             end
-            currentCoin = nil
-            return  -- Move to next batch next frame
         end
 
-        -- ═══ FLY to nearest coin (stays at HOVER_HEIGHT) ═══
+        -- ═══ FLY toward nearest coin ═══
         local target = currentCoin
-        if not target or not target:IsDescendantOf(workspace) then
-            target = getNearestCoin()
-            currentCoin = target
+        if escapeTarget and tick() < escapeUntil then
+            target = escapeTarget
+        else
+            escapeTarget = nil
+            if not target or not target:IsDescendantOf(workspace) then
+                target = getNearestCoin()
+                currentCoin = target
+            end
         end
         if not target then return end
 
@@ -582,8 +639,8 @@ RunService.Heartbeat:Connect(function()
         local delta = targetPos - hrp.Position
         local dist = delta.Magnitude
 
-        if dist > 0.5 then
-            local step = math.min(FLY_SPEED / 60, dist - 1)
+        if dist > 1 then
+            local step = math.min(FLY_SPEED / 60, dist - 0.5)
             if step > 0 then
                 hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * step)
             end
@@ -593,7 +650,7 @@ RunService.Heartbeat:Connect(function()
         hrp.AssemblyLinearVelocity = Vector3.zero
         hrp.RotVelocity = Vector3.zero
 
-        -- Anti-sky bug
+        -- Anti-sky
         if hrp.Position.Y > target.Position.Y + 20 then
             hrp.CFrame = CFrame.new(hrp.Position.X, target.Position.Y + HOVER_HEIGHT, hrp.Position.Z)
             hrp.Velocity = Vector3.zero
@@ -862,6 +919,7 @@ local FarmBtn = makeToggle(56, "طيران + جمع + هروب", "✈️", false
         farmStartedAt = tick()
         lastCoinCount = 0
         escapeTarget = nil
+        lastCollectTime = 0
     else
         phase = "idle"
         local char = LocalPlayer.Character
