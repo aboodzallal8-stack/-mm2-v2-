@@ -1,9 +1,9 @@
 --[[
-    عمو تشريب Hub - Mobile v6
-    - Fly to coins (BodyVelocity) + wall clip (noclip) - NO teleport
+    عمو تشريب Hub - Mobile v7 (REAL FLY)
+    - TRUE fly using PlatformStand + BodyVelocity (no walking)
+    - Wall clip (noclip)
     - Murderer fling ONLY at 50 coins
     - Farm persists after death
-    - Clean GUI
 --]]
 
 local Players = game:GetService("Players")
@@ -18,7 +18,7 @@ local LocalPlayer = Players.LocalPlayer
 -- ========== Config ==========
 local CoinLimit = 50
 local walkSpeed = 27
-local FLY_SPEED = 65 -- سرعة الطيران (65 ستود/ث - آمنة من الطرد)
+local FLY_SPEED = 75 -- سرعة الطيران
 
 -- ========== States ==========
 local farmActive = false
@@ -26,7 +26,7 @@ local flingMurdererOnReset = false
 local antiAFKActive = true
 local pendingRespawn = false
 local flyBV = nil
-local noclipEnabled = false
+local flying = false
 
 -- ========== Anti-AFK ==========
 task.spawn(function()
@@ -41,12 +41,12 @@ task.spawn(function()
     end
 end)
 
--- ========== Speed ==========
+-- ========== Speed (only when NOT flying) ==========
 local function applySpeed()
     local char = LocalPlayer.Character
     if char then
         local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum then hum.WalkSpeed = walkSpeed end
+        if hum and not flying then hum.WalkSpeed = walkSpeed end
     end
 end
 
@@ -55,7 +55,7 @@ applySpeed()
 RunService.Heartbeat:Connect(function()
     pcall(function()
         local char = LocalPlayer.Character
-        if char then
+        if char and not flying then
             local hum = char:FindFirstChildOfClass("Humanoid")
             if hum and hum.WalkSpeed ~= walkSpeed and not pendingRespawn then
                 hum.WalkSpeed = walkSpeed
@@ -64,15 +64,40 @@ RunService.Heartbeat:Connect(function()
     end)
 end)
 
--- ========== Noclip (اختراق الجدران) ==========
-local function setNoclip(state)
-    if noclipEnabled == state then return end
-    noclipEnabled = state
+-- ========== Fly helpers ==========
+local function startFly(hrp, hum)
+    flying = true
+    hum.PlatformStand = true
+    hum.WalkSpeed = 0
+    if not flyBV or flyBV.Parent ~= hrp then
+        if flyBV then pcall(function() flyBV:Destroy() end) end
+        flyBV = Instance.new("BodyVelocity")
+        flyBV.Name = "FarmFly"
+        flyBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        flyBV.P = 10000
+        flyBV.Parent = hrp
+    end
+end
+
+local function stopFly()
+    if flyBV then
+        pcall(function() flyBV:Destroy() end)
+        flyBV = nil
+    end
+    flying = false
     local char = LocalPlayer.Character
     if char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            pcall(function()
+                hum.PlatformStand = false
+                hum.WalkSpeed = walkSpeed
+            end)
+        end
+        -- نرجع الكوليجن
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") then
-                pcall(function() part.CanCollide = not state end)
+                pcall(function() part.CanCollide = true end)
             end
         end
     end
@@ -83,22 +108,17 @@ local function getMurderer()
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
         local bp = player:FindFirstChild("Backpack")
-        if bp and bp:FindFirstChild("Knife") then
-            return player
-        end
+        if bp and bp:FindFirstChild("Knife") then return player end
         local char = player.Character
         if char then
             for _, tool in ipairs(char:GetChildren()) do
-                if tool:IsA("Tool") and tool.Name == "Knife" then
-                    return player
-                end
+                if tool:IsA("Tool") and tool.Name == "Knife" then return player end
             end
         end
     end
     return nil
 end
 
--- ========== Kill Player (teleport to sky - guaranteed death) ==========
 local function killPlayer(targetPlayer)
     if not targetPlayer or not targetPlayer.Character then return false end
     local char = targetPlayer.Character
@@ -124,7 +144,6 @@ local function killPlayer(targetPlayer)
         end
         pcall(function() hum.PlatformStand = false end)
     end)
-    
     return true
 end
 
@@ -330,7 +349,7 @@ SpeedBox.FocusLost:Connect(function()
     local n = tonumber(SpeedBox.Text)
     if n and n >= 16 and n <= 100 then
         walkSpeed = n
-        applySpeed()
+        if not flying then applySpeed() end
     else
         SpeedBox.Text = tostring(walkSpeed)
     end
@@ -338,6 +357,7 @@ end)
 
 local FarmBtn = makeToggle(100, "جمع تلقائي", "🌾", false, function(state)
     farmActive = state
+    if not state then stopFly() end
 end)
 
 local FlingMurdererBtn = makeToggle(166, "فلنك القاتل عند 50", "💥", false, function(state)
@@ -399,7 +419,7 @@ FloatBtn.InputEnded:Connect(function(input)
     end
 end)
 
--- ========== Farm System ==========
+-- ========== Farm helpers ==========
 local function getHRP()
     local char = LocalPlayer.Character
     return char and char:FindFirstChild("HumanoidRootPart")
@@ -422,29 +442,15 @@ local function getNearestCoin()
     return closest, dist
 end
 
--- Stop fly (cleanup)
-local function stopFly()
-    if flyBV then
-        pcall(function() flyBV:Destroy() end)
-        flyBV = nil
-    end
-    setNoclip(false)
-    local hrp = getHRP()
-    if hrp then hrp.Velocity = Vector3.zero end
-end
-
--- Auto reset (with murderer fling at 50)
 local function doAutoRespawn()
     if pendingRespawn then return end
     pendingRespawn = true
-
     stopFly()
 
     if flingMurdererOnReset then
         local murderer = getMurderer()
         if murderer and murderer.Character then
-            local murdChar = murderer.Character
-            local murdHum = murdChar:FindFirstChildOfClass("Humanoid")
+            local murdHum = murderer.Character:FindFirstChildOfClass("Humanoid")
             if murdHum and murdHum.Health > 0 then
                 killPlayer(murderer)
                 task.wait(1.5)
@@ -463,11 +469,9 @@ local function doAutoRespawn()
     pendingRespawn = false
     if farmActive then
         task.wait(0.3)
-        applySpeed()
     end
 end
 
--- Reset detection (event)
 task.spawn(function()
     local remotes = ReplicatedStorage:WaitForChild("Remotes", 10)
     if not remotes then return end
@@ -482,7 +486,6 @@ task.spawn(function()
     end)
 end)
 
--- Polling backup
 task.spawn(function()
     while true do
         task.wait(0.3)
@@ -509,53 +512,62 @@ task.spawn(function()
     end
 end)
 
--- ========== FLY FARM LOOP (طيران + اختراق جدران) ==========
-task.spawn(function()
-    while true do
-        task.wait(0.05)
-        pcall(function()
-            if farmActive and not pendingRespawn then
-                local coin, dist = getNearestCoin()
-                if coin then
-                    local char = LocalPlayer.Character
-                    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-                    local hum = char and char:FindFirstChildOfClass("Humanoid")
-                    if hrp and hum and hum.Health > 0 then
-                        -- تفعيل اختراق الجدران
-                        setNoclip(true)
+-- ========== FLY LOOP (every frame - REAL FLY) ==========
+RunService.Heartbeat:Connect(function()
+    pcall(function()
+        if not farmActive or pendingRespawn then
+            if flying then stopFly() end
+            return
+        end
 
-                        -- إنشاء BodyVelocity للطيران إذا ما موجود
-                        if not flyBV or flyBV.Parent ~= hrp then
-                            if flyBV then pcall(function() flyBV:Destroy() end) end
-                            flyBV = Instance.new("BodyVelocity")
-                            flyBV.Name = "FarmFly"
-                            flyBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-                            flyBV.Parent = hrp
-                        end
+        local coin, dist = getNearestCoin()
+        if not coin then return end
 
-                        if dist < 6 then
-                            -- قريب من الكوين: نوقف الطيران ونجمع
-                            flyBV.Velocity = Vector3.zero
-                            pcall(function()
-                                firetouchinterest(hrp, coin, 0)
-                                task.wait(0.05)
-                                firetouchinterest(hrp, coin, 1)
-                            end)
-                        else
-                            -- نطير نحو الكوين (بدون تيليبورت!)
-                            local dir = (coin.Position - hrp.Position).Unit
-                            flyBV.Velocity = dir * FLY_SPEED
-                            -- نثبت الشخصية عشان ما تسقط
-                            hum.PlatformStand = false
-                        end
-                    end
-                end
-            else
-                -- الفارم مو شغال: نوقف الطيران ونرجع طبيعي
-                stopFly()
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not hrp or not hum or hum.Health <= 0 then return end
+
+        -- نشغل الطيران أول مرة
+        if not flying then
+            startFly(hrp, hum)
+        end
+
+        -- نتأكد BodyVelocity موجود
+        if not flyBV or flyBV.Parent ~= hrp then
+            if flyBV then pcall(function() flyBV:Destroy() end) end
+            flyBV = Instance.new("BodyVelocity")
+            flyBV.Name = "FarmFly"
+            flyBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+            flyBV.P = 10000
+            flyBV.Parent = hrp
+        end
+
+        -- نخلي الشخصية تطير (PlatformStand يمنع المشي)
+        hum.PlatformStand = true
+        hum.WalkSpeed = 0
+
+        -- اختراق جدران مستمر
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") then
+                if part.CanCollide then part.CanCollide = false end
             end
-        end)
-    end
+        end
+
+        -- الحركة
+        if dist < 5 then
+            -- قريب: وقف وجمع
+            flyBV.Velocity = Vector3.zero
+            pcall(function()
+                firetouchinterest(hrp, coin, 0)
+                firetouchinterest(hrp, coin, 1)
+            end)
+        else
+            -- نطير باتجاه الكوين
+            local dir = (coin.Position - hrp.Position).Unit
+            flyBV.Velocity = dir * FLY_SPEED
+        end
+    end)
 end)
 
 -- Coin info
@@ -592,5 +604,10 @@ end)
 
 LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(0.5)
-    applySpeed()
+    flying = false
+    if farmActive then
+        -- راح يشتغل الطيران تلقائياً في اللوب
+    else
+        applySpeed()
+    end
 end)
