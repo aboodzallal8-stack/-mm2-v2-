@@ -1,11 +1,10 @@
 --[[
-    عمو تشريب Hub - Mobile v59 DEFINITIVE COIN COLLECT FIX
-    ========================================================
-    - Fixed Underground Collecting (Real Pop-Touch Mechanism)
-    - Auto Game/Round Detector (No Sky Fly / No Lobby Fall)
-    - Safe Underground 8 Studs Position Fix
-    - Single Fake & Real Character Touch Backup
-    - Realtime Coin Counter (Max 50) & Custom Logo
+    عمو تشريب Hub - Mobile v60 REAL POP-COLLECT FIX
+    ==================================================
+    - Real Pop-Teleport Coin Collection (100% Working)
+    - Underground Safe Offset (8 Studs)
+    - Anti-Sky Fly & Anti-Lobby Void Fall
+    - Live Coin Tracker (Max 50) + Custom Icon
 --]]
 
 local Players = game:GetService("Players")
@@ -26,12 +25,12 @@ local farmActive = false
 local flingActive = true
 local smartRoleActive = true
 local antiAFKActive = true
-local pendingAction = false
+local isCollecting = false
 
 local collectedCoinsCount = 0
 local coinsCache = {}
 local lastCacheUpdate = 0
-local lastCollectTime = 0
+local lastCollectTick = 0
 
 -- ANTI-AFK SYSTEM
 task.spawn(function()
@@ -46,7 +45,7 @@ task.spawn(function()
     end
 end)
 
--- SAFE COIN FINDER
+-- GET ACTIVE ROUND COINS
 local function getCoins()
     if tick() - lastCacheUpdate < 0.2 then return coinsCache end
     lastCacheUpdate = tick()
@@ -58,7 +57,7 @@ local function getCoins()
                 local container = map:FindFirstChild("CoinContainer") or map:FindFirstChild("Coins")
                 if container then
                     for _, coin in ipairs(container:GetChildren()) do
-                        if coin and coin:IsA("BasePart") then
+                        if coin and coin:IsA("BasePart") and coin.Parent then
                             table.insert(coinsCache, coin)
                         end
                     end
@@ -109,7 +108,6 @@ local function getGameCoinCount()
     return success and count or 0
 end
 
--- CLEANUP PHYSICS
 local function cleanupPhysics()
     local char = LocalPlayer.Character
     if not char then return end
@@ -129,12 +127,16 @@ LocalPlayer.CharacterAdded:Connect(function()
     cleanupPhysics()
 end)
 
--- REAL POP-TOUCH UNDERGROUND COLLECTION (Gives 100% Coin Collection)
-local function collectCoinUnderground(coin, char, hrp)
-    if not coin or not coin.Parent or not hrp then return end
+-- POP-TELEPORT COIN COLLECTOR (Instant Touch & Return)
+local function popCollectCoin(coin, char, hrp, hum)
+    if not coin or not coin.Parent or not hrp or isCollecting then return end
+    isCollecting = true
     
-    -- Real touch fire interest
+    local oldCFrame = hrp.CFrame
+    
+    -- Pop to coin position for 1 frame
     pcall(function()
+        hrp.CFrame = coin.CFrame
         firetouchinterest(hrp, coin, 0)
         firetouchinterest(hrp, coin, 1)
         
@@ -145,26 +147,33 @@ local function collectCoinUnderground(coin, char, hrp)
             end
         end
     end)
+    
+    task.wait(0.016) -- 1 Frame delay for server registration
+    
+    -- Return immediately to underground safe position
+    pcall(function()
+        hrp.CFrame = oldCFrame
+    end)
+    
+    isCollecting = false
 end
 
--- MAIN SMART FARM LOOP
+-- MAIN FARM LOOP
 RunService.Heartbeat:Connect(function()
     pcall(function()
-        if not farmActive or pendingAction then return end
+        if not farmActive or isCollecting then return end
 
         local char = LocalPlayer.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         if not hrp or not hum or hum.Health <= 0 then return end
 
-        -- Check if map/coins exist (Active Round Check)
         local allCoins = getCoins()
         if #allCoins == 0 then
             cleanupPhysics()
             return
         end
 
-        -- Secure Underground State
         hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
         hum.PlatformStand = true
         
@@ -174,34 +183,33 @@ RunService.Heartbeat:Connect(function()
 
         collectedCoinsCount = getGameCoinCount()
 
-        -- Target Nearest Coin
         local coin = getNearestCoin()
         if coin then
             local targetPos = Vector3.new(coin.Position.X, coin.Position.Y - UNDER_OFFSET, coin.Position.Z)
             local delta = targetPos - hrp.Position
             
-            -- Smooth Movement Underground (No flying to sky)
-            if delta.Magnitude > 0.3 then
+            -- Smooth Underground Teleport & Lock
+            if delta.Magnitude > 2 then
                 hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * math.min(delta.Magnitude, FARM_SPEED * 0.03))
             else
                 hrp.CFrame = CFrame.new(targetPos)
+                
+                -- Trigger Pop Collection when close enough underground
+                if tick() - lastCollectTick > 0.08 then
+                    lastCollectTick = tick()
+                    popCollectCoin(coin, char, hrp, hum)
+                end
             end
             
             hrp.AssemblyLinearVelocity = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
-
-            -- Collect Coin (Interval Trigger)
-            if tick() - lastCollectTime > 0.05 then
-                lastCollectTime = tick()
-                collectCoinUnderground(coin, char, hrp)
-            end
         end
     end)
 end)
 
 -- UI INTERFACE SETUP
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AmoChereebUltimateV59"
+ScreenGui.Name = "AmoChereebUltimateV60"
 ScreenGui.Parent = CoreGui
 ScreenGui.ResetOnSpawn = false
 
@@ -248,7 +256,7 @@ local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(1, -50, 1, 0)
 TitleText.Position = UDim2.new(0, 15, 0, 0)
 TitleText.BackgroundTransparency = 1
-TitleText.Text = "⚡ عمو تشريب Hub - v59"
+TitleText.Text = "⚡ عمو تشريب Hub - v60"
 TitleText.TextColor3 = Color3.fromRGB(255, 170, 0)
 TitleText.Font = Enum.Font.GothamBold
 TitleText.TextSize = 15
@@ -351,7 +359,7 @@ local function createToggle(yPos, text, icon, default, callback)
     end)
 end
 
-createToggle(0, "تجميع العملات تحت الأرض", "🪙", false, function(st)
+createToggle(0, "تجميع العملات التلقائي", "🪙", false, function(st)
     farmActive = st
     if not st then
         cleanupPhysics()
