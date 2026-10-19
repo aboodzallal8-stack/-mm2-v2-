@@ -1,16 +1,15 @@
 --[[
-    عمو تشريب Hub - Mobile v76 - ULTIMATE FLY & COLLECTION FIX
-    ==========================================================
-    - Fixed coin scanner to scan all workspace descendants (Global Find)
-    - Real underground flight & smooth movement at speed 30
-    - Auto Character Reset at Max 50 Coins
+    عمو تشريب Hub - Mobile v77 REAL FLY & SMOOTH FARM FIX
+    ======================================================
+    - Smooth Flying Physics with Swimming State Override
+    - Underground Farm (8 Studs) at Speed 30
+    - Active Coin Collection Logic & Auto-Reset at 50 Coins
 --]]
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local VirtualUser = game:GetService("VirtualUser")
-local CoreGui = game:GetService("CoreGui")
 
 if not game:IsLoaded() then
     game.Loaded:Wait()
@@ -90,7 +89,7 @@ local function getGameCoinCount()
     return success and result or 0
 end
 
--- ULTRA ROBUST COIN SCAN (فحص شامل لجميع الكوينز في الخريطة بغض النظر عن اسم المجلد)
+-- COIN VALIDATION
 local function isRealAndExistingCoin(part)
     if not part or not part:IsA("BasePart") then
         return false
@@ -133,7 +132,6 @@ local function getValidCoins()
     pcall(function()
         for _, obj in ipairs(workspace:GetDescendants()) do
             if obj and obj:IsA("BasePart") and not seen[obj] and not blacklistedCoins[obj] then
-                -- استبعاد اللوبي تماماً
                 local isInLobby = false
                 local p = obj.Parent
                 while p and p ~= workspace do
@@ -199,6 +197,7 @@ local function cleanupPhysics()
 
         if hum then
             hum.PlatformStand = false
+            hum:ChangeState(Enum.HumanoidStateType.GettingUp)
         end
     end)
 end
@@ -228,7 +227,7 @@ local function triggerUndergroundTouch(coin, char, hrp)
     end)
 end
 
--- FARM & FLY LOOP
+-- MAIN FARM LOOP
 RunService.Heartbeat:Connect(function(dt)
     pcall(function()
         if not farmActive then return end
@@ -263,9 +262,9 @@ RunService.Heartbeat:Connect(function(dt)
             return
         end
 
-        hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
-        hum.PlatformStand = true
-
+        -- تفعيل الطيران السلس عبر تغيير الحالة وإلغاء التصادم
+        hum:ChangeState(Enum.HumanoidStateType.Swimming)
+        
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") then
                 part.CanCollide = false
@@ -284,14 +283,14 @@ RunService.Heartbeat:Connect(function(dt)
                 currentTargetCoin = coin
                 coinTargetStartTime = tick()
             else
-                if tick() - coinTargetStartTime > 0.4 then
+                if tick() - coinTargetStartTime > 0.5 then
                     blacklistedCoins[coin] = true
                     currentTargetCoin = nil
                     return
                 end
             end
 
-            -- الطيران والتحليق تحت الأرض بمسافة 8 ستود وبسرعة 30
+            -- حركة الطيران والتجمع تحت الأرض بمسافة 8 ستود وبسرعة 30
             local targetPos = Vector3.new(coin.Position.X, coin.Position.Y - UNDER_OFFSET, coin.Position.Z)
             local delta = targetPos - hrp.Position
             local moveStep = math.min(delta.Magnitude, FARM_SPEED * dt)
@@ -312,7 +311,7 @@ end)
 
 -- UI SETUP
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AmoChereebUltimateV76"
+ScreenGui.Name = "AmoChereebUltimateV77"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.IgnoreGuiInset = true
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
@@ -361,7 +360,7 @@ local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(1, -50, 1, 0)
 TitleText.Position = UDim2.new(0, 15, 0, 0)
 TitleText.BackgroundTransparency = 1
-TitleText.Text = "⚡ عمو تشريب Hub - v76"
+TitleText.Text = "⚡ عمو تشريب Hub - v77"
 TitleText.TextColor3 = Color3.fromRGB(255, 170, 0)
 TitleText.Font = Enum.Font.GothamBold
 TitleText.TextSize = 15
