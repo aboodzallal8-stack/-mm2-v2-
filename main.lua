@@ -1,11 +1,9 @@
 --[[
-    عمو تشريب Hub - Mobile v21 FINAL-FIX
-    =====================================
-    - FLING: continuous velocity every frame (guaranteed kill)
-    - AUTO-FLING: on from start (server join)
-    - TELEPORT: instant to first coin
-    - FALL-FIX: HRP collidable + recovery teleport
-    - RESET: flings murderer before reset at 50
+    عمو تشريب Hub - Mobile v22 FAST
+    =================================
+    - Waits for round + coins before farming
+    - Instant collect (no waiting between coins)
+    - Cached murderer (0.3s scan, fast fling)
 --]]
 
 local Players = game:GetService("Players")
@@ -22,17 +20,19 @@ local LocalPlayer = Players.LocalPlayer
 local walkSpeed = 27
 local FLY_SPEED = 27
 local HOVER_HEIGHT = 3
+local COIN_TIMEOUT = 3  -- تجاهل الكوين بعد 3 ثواني معلقة
 
 -- ═══════════════════════════════════════
 -- STATES
 -- ═══════════════════════════════════════
 local farmActive = false
-local flingActive = true   -- ← شغال افتراضياً (auto-fling)
+local flingActive = true
 local antiAFKActive = true
 local pendingRespawn = false
 local lastResetTime = 0
-local ignoreCoins = {}
-local hasTeleportedToFirstCoin = false
+local stuckCoins = {}       -- الكوينز اللي علقت
+local firstTeleportDone = false
+local cachedMurderer = nil  -- ميرد محفوظ
 
 -- ═══════════════════════════════════════
 -- ANTI-AFK
@@ -50,126 +50,81 @@ task.spawn(function()
 end)
 
 -- ═══════════════════════════════════════
--- MURDERER DETECTION (5 methods)
+-- MURDERER SCAN (fast - every 0.3s, cached)
 -- ═══════════════════════════════════════
-local function getMurderer()
-    -- Method 1: Equipped tool in character
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player == LocalPlayer then continue end
-        local char = player.Character
-        if char then
-            for _, tool in ipairs(char:GetDescendants()) do
-                if tool:IsA("Tool") then
-                    local tn = tool.Name:lower()
-                    if tn:find("knife") or tn:find("murder") then
-                        return player
-                    end
-                end
-            end
-        end
-    end
-    -- Method 2: Backpack
+local function scanMurdererFast()
+    -- Method 1: Backpack (FASTEST - only checks ~15 items)
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
         local bp = player:FindFirstChild("Backpack")
         if bp then
-            for _, tool in ipairs(bp:GetDescendants()) do
-                if tool:IsA("Tool") then
-                    local tn = tool.Name:lower()
-                    if tn:find("knife") or tn:find("murder") then
-                        return player
-                    end
-                end
+            for _, item in ipairs(bp:GetChildren()) do
+                if item.Name == "Knife" then return player end
             end
         end
     end
-    -- Method 3: Workspace
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("Tool") then
-            local tn = obj.Name:lower()
-            if tn:find("knife") or tn:find("murder") then
-                local parent = obj.Parent
-                if parent then
-                    local plr = Players:GetPlayerFromCharacter(parent)
-                    if plr and plr ~= LocalPlayer then return plr end
-                end
-            end
-        end
-    end
-    -- Method 4: Attributes
+
+    -- Method 2: Equipped in character (fast - direct children only)
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
-        for _, attrName in ipairs({"Role", "role", "GameRole", "Team", "Class"}) do
-            local role = player:GetAttribute(attrName)
-            if role then
-                local r = tostring(role):lower()
-                if r:find("murder") or r:find("killer") then
-                    return player
-                end
+        local char = player.Character
+        if char then
+            for _, item in ipairs(char:GetChildren()) do
+                if item:IsA("Tool") and item.Name == "Knife" then return player end
             end
         end
     end
-    -- Method 5: Team name
+
+    -- Method 3: Attributes (fast)
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
-        if player.Team then
-            local tn = player.Team.Name:lower()
-            if tn:find("murder") or tn:find("killer") then
-                return player
-            end
+        for _, attr in ipairs({"Role", "role", "GameRole"}) do
+            local r = player:GetAttribute(attr)
+            if r and tostring(r):lower():find("murder") then return player end
         end
     end
+
+    -- Method 4: Workspace (SLOW - only if above failed)
+    for _, obj in ipairs(workspace:GetChildren()) do
+        if obj:IsA("Tool") and obj.Name == "Knife" then
+            local plr = Players:GetPlayerFromCharacter(obj.Parent)
+            if plr and plr ~= LocalPlayer then return plr end
+        end
+    end
+
     return nil
 end
 
+task.spawn(function()
+    while true do
+        task.wait(0.3)
+        cachedMurderer = scanMurdererFast()
+    end
+end)
+
 -- ═══════════════════════════════════════
--- FLING (velocity EVERY FRAME - GUARANTEED)
+-- FLING (uses cached, applied every frame)
 -- ═══════════════════════════════════════
 RunService.Heartbeat:Connect(function()
     if not flingActive or pendingRespawn then return end
+    if not cachedMurderer then return end
 
-    local murderer = getMurderer()
-    if not murderer then return end
-
-    local char = murderer.Character
+    local char = cachedMurderer.Character
     if not char then return end
 
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local hum = char:FindFirstChildOfClass("Humanoid")
     if not hrp or not hum or hum.Health <= 0 then return end
 
-    -- ═══ CORE FLING ═══
-    -- Disable collision
     pcall(function()
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part.CanCollide = false
-            end
-        end
-    end)
-
-    -- PlatformStand
-    pcall(function() hum.PlatformStand = true end)
-
-    -- Massively apply velocity EVERY FRAME (this is the key)
-    pcall(function()
+        hum.PlatformStand = true
+        hrp.CanCollide = false
         hrp.AssemblyLinearVelocity = Vector3.new(
             math.random(-500, 500),
-            500000 + math.random(0, 100000),
+            500000,
             math.random(-500, 500)
         )
-    end)
-
-    -- Also set Velocity (older property)
-    pcall(function()
         hrp.Velocity = Vector3.new(0, 500000, 0)
-    end)
-
-    -- CFrame to sky (backup)
-    pcall(function()
-        if hrp.Position.Y < 3000 then
-            hrp.CFrame = CFrame.new(hrp.Position.X, 5000, hrp.Position.Z)
-        end
     end)
 end)
 
@@ -184,10 +139,10 @@ end
 local function getAllCoins()
     local coins = {}
     for _, map in ipairs(workspace:GetChildren()) do
-        if map:FindFirstChild("CoinContainer") then
+        if map.Name ~= "Lobby" and map:FindFirstChild("CoinContainer") then
             for _, coin in ipairs(map.CoinContainer:GetChildren()) do
                 if coin:IsA("BasePart") and coin:FindFirstChild("TouchInterest") then
-                    if ignoreCoins[coin] ~= true then
+                    if stuckCoins[coin] ~= true then
                         table.insert(coins, coin)
                     end
                 end
@@ -244,7 +199,7 @@ local function doAutoRespawn()
     if tick() - lastResetTime < 5 then return end
     pendingRespawn = true
     lastResetTime = tick()
-    print("[RESET] 50 coins reached - flinging murderer then reset")
+    print("[RESET]")
 
     local char = LocalPlayer.Character
     if char then
@@ -258,17 +213,15 @@ local function doAutoRespawn()
         end
     end
 
-    -- Fling murderer before reset (extra effort)
-    local m = getMurderer()
-    if m and m.Character then
+    -- Fling murderer before reset (intense 3 sec)
+    if cachedMurderer and cachedMurderer.Character then
         for i = 1, 60 do
-            local h = m.Character and m.Character:FindFirstChildOfClass("Humanoid")
+            local h = cachedMurderer.Character:FindFirstChildOfClass("Humanoid")
             if not h or h.Health <= 0 then break end
-            local hrp = m.Character:FindFirstChild("HumanoidRootPart")
+            local hrp = cachedMurderer.Character:FindFirstChild("HumanoidRootPart")
             if hrp then
                 pcall(function()
                     hrp.AssemblyLinearVelocity = Vector3.new(0, 500000, 0)
-                    hrp.CFrame = CFrame.new(hrp.Position.X, 5000 + i * 500, hrp.Position.Z)
                 end)
             end
             task.wait(0.05)
@@ -283,19 +236,17 @@ local function doAutoRespawn()
     end
     task.wait(3)
     pendingRespawn = false
-    ignoreCoins = {}
-    hasTeleportedToFirstCoin = false
+    stuckCoins = {}
+    firstTeleportDone = false
 end
 
 task.spawn(function()
     while true do
         task.wait(0.5)
-        if farmActive and not pendingRespawn then
-            if isInRound() then
-                local cur, mx = getCoinCount()
-                if mx and mx >= 40 and cur >= mx then
-                    doAutoRespawn()
-                end
+        if farmActive and not pendingRespawn and isInRound() then
+            local cur, mx = getCoinCount()
+            if mx and mx >= 40 and cur >= mx then
+                doAutoRespawn()
             end
         end
     end
@@ -472,7 +423,6 @@ local function makeToggle(yPos, text, icon, defaultState, callback)
     return btn
 end
 
--- Speed
 local SpeedLabel = Instance.new("TextLabel")
 SpeedLabel.Size = UDim2.new(0, 170, 0, 34)
 SpeedLabel.Position = UDim2.new(0, 12, 0, 56)
@@ -507,11 +457,11 @@ SpeedBox.FocusLost:Connect(function()
     end
 end)
 
--- Toggles
 local FarmBtn = makeToggle(100, "طيران + جمع", "✈️", false, function(state)
     farmActive = state
     if state then
-        hasTeleportedToFirstCoin = false
+        firstTeleportDone = false
+        stuckCoins = {}
     else
         local char = LocalPlayer.Character
         if char then
@@ -519,7 +469,6 @@ local FarmBtn = makeToggle(100, "طيران + جمع", "✈️", false, function
             if hum then
                 hum.PlatformStand = false
                 hum.WalkSpeed = 16
-                hum.JumpPower = 50
             end
             for _, part in ipairs(char:GetDescendants()) do
                 if part:IsA("BasePart") then part.CanCollide = true end
@@ -536,7 +485,6 @@ local AFKBtn = makeToggle(240, "مكافحة الطرد", "⏳", true, function(
     antiAFKActive = state
 end)
 
--- Coin info
 local CoinPanel = Instance.new("Frame")
 CoinPanel.Size = UDim2.new(1, -24, 0, 44)
 CoinPanel.Position = UDim2.new(0, 12, 0, 320)
@@ -589,11 +537,17 @@ FloatBtn.InputEnded:Connect(function(input)
 end)
 
 -- ═══════════════════════════════════════
--- FARM LOOP (Stepped - before physics)
+-- FARM LOOP (waits for round + coins)
 -- ═══════════════════════════════════════
 RunService.Stepped:Connect(function()
     pcall(function()
         if not farmActive or pendingRespawn then return end
+
+        -- ═══ CHECK: in round? ═══
+        if not isInRound() then
+            -- In lobby, wait
+            return
+        end
 
         local char = LocalPlayer.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -606,29 +560,31 @@ RunService.Stepped:Connect(function()
         hum.JumpPower = 0
         hum.AutoRotate = false
 
-        -- Noclip ONLY non-HRP parts
+        -- Noclip non-HRP parts
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
                 if part.CanCollide then part.CanCollide = false end
             end
         end
-        -- HRP stays collidable (prevent fall-through)
         hrp.CanCollide = true
 
-        -- Find coin
+        -- ═══ CHECK: coins exist? ═══
         local coin, dist = getNearestCoin()
-        if not coin then return end
-
-        -- ═══ TELEPORT TO FIRST COIN (instant) ═══
-        if not hasTeleportedToFirstCoin then
-            hrp.CFrame = CFrame.new(coin.Position + Vector3.new(0, HOVER_HEIGHT, 0))
-            hrp.Velocity = Vector3.zero
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            hasTeleportedToFirstCoin = true
+        if not coin then
+            -- No coins yet (map loading), wait
             return
         end
 
-        -- ═══ RECOVERY: if fell below floor ═══
+        -- ═══ TELEPORT TO FIRST COIN ═══
+        if not firstTeleportDone then
+            hrp.CFrame = CFrame.new(coin.Position + Vector3.new(0, HOVER_HEIGHT, 0))
+            hrp.Velocity = Vector3.zero
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            firstTeleportDone = true
+            return
+        end
+
+        -- ═══ RECOVERY: fell under floor ═══
         if hrp.Position.Y < -50 then
             hrp.CFrame = CFrame.new(coin.Position + Vector3.new(0, HOVER_HEIGHT, 0))
             hrp.Velocity = Vector3.zero
@@ -636,22 +592,19 @@ RunService.Stepped:Connect(function()
             return
         end
 
-        -- ═══ FLY to coin ═══
+        -- ═══ FLY towards coin ═══
         local target = coin.Position + Vector3.new(0, HOVER_HEIGHT, 0)
         local delta = target - hrp.Position
         if delta.Magnitude > 1 then
             local step = math.min(FLY_SPEED / 60, delta.Magnitude)
-            local newPos = hrp.Position + delta.Unit * step
-            hrp.CFrame = CFrame.new(newPos)
+            hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * step)
         end
 
-        -- Zero velocity (no falling)
         hrp.Velocity = Vector3.zero
         hrp.AssemblyLinearVelocity = Vector3.zero
-        hrp.RotVelocity = Vector3.zero
 
-        -- ═══ COLLECT ═══
-        if dist < 6 then
+        -- ═══ COLLECT (immediate, no wait) ═══
+        if dist < 7 then
             for _, part in ipairs(char:GetDescendants()) do
                 if part:IsA("BasePart") then
                     pcall(function()
@@ -661,31 +614,32 @@ RunService.Stepped:Connect(function()
                 end
             end
 
-            -- Track stuck coin
-            if not ignoreCoins[coin] then
-                ignoreCoins[coin] = tick()
-            elseif type(ignoreCoins[coin]) == "number" and tick() - ignoreCoins[coin] > 1.5 then
-                ignoreCoins[coin] = true
+            -- Track stuck coin (only if >3s)
+            if not stuckCoins[coin] then
+                stuckCoins[coin] = tick()
+            elseif type(stuckCoins[coin]) == "number" and tick() - stuckCoins[coin] > COIN_TIMEOUT then
+                stuckCoins[coin] = true
             end
         end
     end)
 end)
 
--- Coin info update
+-- Coin info
 local function updateCoinInfo()
     local cur, mx = getCoinCount()
     local count = #getAllCoins()
-    CoinInfo.Text = "🪙 " .. cur .. " / " .. (mx > 0 and mx or 50) .. "  •  الخريطة: " .. count
+    local roundStatus = isInRound() and "🎯" or "🏠"
+    CoinInfo.Text = roundStatus .. " 🪙 " .. cur .. " / " .. (mx > 0 and mx or 50) .. "  •  الخريطة: " .. count
 end
 
 RunService.Heartbeat:Connect(function()
     pcall(updateCoinInfo)
 end)
 
--- Respawn handler
+-- Respawn
 LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(0.5)
-    hasTeleportedToFirstCoin = false
+    firstTeleportDone = false
     if not farmActive then
         local hum = char:FindFirstChildOfClass("Humanoid")
         if hum then hum.WalkSpeed = 16 end
