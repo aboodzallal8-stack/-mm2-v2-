@@ -1,8 +1,8 @@
 --[[
-    عمو تشريب Hub - Mobile v71 VALID COINS ONLY FIX
-    =================================================
-    - Strict Real Coin Filter (Only picks parts with actual TouchInterests)
-    - Fixed Fake/Non-existent parts collection bug
+    عمو تشريب Hub - Mobile v72 ZERO GHOST COINS FIX
+    ================================================
+    - Strict Real-Time Validity & Transparency Check
+    - Instantly skips ghost/collected/invisible coins
     - Underground Farm (8 Studs) at Speed 30
 --]]
 
@@ -62,23 +62,30 @@ task.spawn(function()
     end
 end)
 
--- SAFE & STRICT REAL COIN SCAN (فحص دقيق للعملات الحقيقية التي تملك خاصية اللمس فقط)
-local function isRealCoin(part)
+-- ULTRA STRICT REAL & EXISTING COIN CHECK
+local function isRealAndExistingCoin(part)
     if not part or not part:IsA("BasePart") then
         return false
     end
 
-    -- التأكد أن القطعة تحتوي على خاصية اللمس الخاصة بالعملات الفاعلة
+    -- تأكد أن الكوين غير شفافة (يعني لم يتم جمعها وتلاشيها)
+    if part.Transparency > 0.5 then
+        return false
+    end
+
+    -- التأكد أن الكوين تمتلك خاصية اللمس الفاعلة
     local hasTouch = part:FindFirstChild("TouchInterest") or part:FindFirstChildWhichIsA("TouchTransmitter")
     if not hasTouch then
         return false
     end
 
-    local name = (part.Name or ""):lower()
-    local parentName = (part.Parent and part.Parent.Name or ""):lower()
+    local parent = part.Parent
+    if not parent then
+        return false
+    end
 
-    -- التأكد من المجلدات الصحيحة أو اسم العملة الحقيقي
-    if parentName:find("coincontainer") or parentName:find("coins") or name:find("coin") then
+    local parentName = parent.Name:lower()
+    if parentName:find("coincontainer") or parentName:find("coins") or part.Name:lower():find("coin") then
         return true
     end
 
@@ -86,7 +93,7 @@ local function isRealCoin(part)
 end
 
 local function getValidCoins()
-    if tick() - lastCacheUpdate < 0.15 then
+    if tick() - lastCacheUpdate < 0.1 then
         return coinsCache
     end
 
@@ -95,23 +102,6 @@ local function getValidCoins()
 
     local seen = {}
 
-    local function addPart(part)
-        if not part or not part:IsA("BasePart") then
-            return
-        end
-        if seen[part] then
-            return
-        end
-        if part.Parent and blacklistedCoins[part] then
-            return
-        end
-        if isRealCoin(part) then
-            table.insert(coinsCache, part)
-            seen[part] = true
-        end
-    end
-
-    -- البحث المخصص داخل حاويات العملات الرسمية فقط لضمان عدم التقاط أشياء وهمية
     pcall(function()
         for _, map in ipairs(workspace:GetChildren()) do
             if map and map.Name ~= "Lobby" then
@@ -119,7 +109,10 @@ local function getValidCoins()
                 if container then
                     for _, child in ipairs(container:GetDescendants()) do
                         if child and child:IsA("BasePart") then
-                            addPart(child)
+                            if not seen[child] and not blacklistedCoins[child] and isRealAndExistingCoin(child) then
+                                table.insert(coinsCache, child)
+                                seen[child] = true
+                            end
                         end
                     end
                 end
@@ -262,11 +255,18 @@ RunService.Heartbeat:Connect(function(dt)
 
         local coin = getSmartNearestCoin()
         if coin then
+            -- فحص إضافي: لو الكوين اختفت أو أصبحت شفافة أثناء التوجيه، تجاهلها فوراً
+            if not coin.Parent or coin.Transparency > 0.5 then
+                blacklistedCoins[coin] = true
+                currentTargetCoin = nil
+                return
+            end
+
             if coin ~= currentTargetCoin then
                 currentTargetCoin = coin
                 coinTargetStartTime = tick()
             else
-                if tick() - coinTargetStartTime > 0.5 then
+                if tick() - coinTargetStartTime > 0.4 then
                     blacklistedCoins[coin] = true
                     currentTargetCoin = nil
                     return
@@ -293,7 +293,7 @@ end)
 
 -- UI
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AmoChereebUltimateV71"
+ScreenGui.Name = "AmoChereebUltimateV72"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.IgnoreGuiInset = true
 safeParent(ScreenGui, CoreGui)
@@ -341,7 +341,7 @@ local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(1, -50, 1, 0)
 TitleText.Position = UDim2.new(0, 15, 0, 0)
 TitleText.BackgroundTransparency = 1
-TitleText.Text = "⚡ عمو تشريب Hub - v71"
+TitleText.Text = "⚡ عمو تشريب Hub - v72"
 TitleText.TextColor3 = Color3.fromRGB(255, 170, 0)
 TitleText.Font = Enum.Font.GothamBold
 TitleText.TextSize = 15
