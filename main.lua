@@ -1,10 +1,9 @@
 --[[
-    عمو تشريب Hub - Mobile v73 - FIXED & CLEANED
-    =============================================
-    - Cleaned all hidden parser/syntax errors
-    - Fixed workspace extents error
-    - Precise coin validation and server-verified collection
-    - Underground Farm (8 Studs) at Speed 30 with Auto-Reset at 50 coins
+    عمو تشريب Hub - Mobile v74 INSTANT ASYNC COLLECTION
+    ====================================================
+    - Removed blocking wait loops (No lag/pause on coins)
+    - Strict Underground Farming (8 Studs) at Speed 30
+    - Real-time Coin Counter (Max 50) + Auto Reset
 --]]
 
 local Players = game:GetService("Players")
@@ -56,7 +55,7 @@ task.spawn(function()
     end
 end)
 
--- GUI-authoritative coin count
+-- GUI COIN COUNTER & AUTO RESET
 local function getGameCoinCount()
     local ok, result = pcall(function()
         local mainGui = LocalPlayer.PlayerGui:FindFirstChild("MainGUI")
@@ -76,7 +75,6 @@ local function getGameCoinCount()
     return ok and result or 0
 end
 
--- keep authoritative counter and auto-reset
 task.spawn(function()
     while true do
         local ok, val = pcall(getGameCoinCount)
@@ -94,7 +92,7 @@ task.spawn(function()
     end
 end)
 
--- Map / lobby detection helpers
+-- MAP & LOBBY HELPERS
 local function getTopLevelAncestor(part)
     local p = part
     while p and p.Parent and p.Parent ~= workspace do p = p.Parent end
@@ -134,7 +132,7 @@ local function findPlayerMap()
     return best
 end
 
--- coin validation
+-- COIN VALIDATION
 local function hasTouchTransmitter(part)
     if not part then return false end
     if part:FindFirstChildWhichIsA("TouchTransmitter") then return true end
@@ -158,7 +156,6 @@ local function isRealAndExistingCoin(part)
     return false
 end
 
--- raycast ground at X,Z (Fixed height instead of ExtentsSize)
 local function findGroundYAt(posXZ)
     local origin = Vector3.new(posXZ.X, 300, posXZ.Z)
     local params = RaycastParams.new()
@@ -169,7 +166,6 @@ local function findGroundYAt(posXZ)
     return nil
 end
 
--- get coins only in player's current map; skip collection in lobby
 local function getValidCoins()
     if tick() - lastCacheUpdate < 0.12 then return coinsCache end
     lastCacheUpdate = tick()
@@ -241,63 +237,25 @@ LocalPlayer.CharacterAdded:Connect(function()
     currentTargetCoin = nil
 end)
 
-local function triggerUndergroundTouch(coin, char, hrp)
-    if not coin or not coin.Parent or not hrp then return false end
-    local ok = pcall(function()
-        firetouchinterest(hrp, coin, 0); firetouchinterest(hrp, coin, 1)
-        task.wait(0.03)
+-- INSTANT NON-BLOCKING TOUCH
+local function triggerTouchAsync(coin, char, hrp)
+    if not coin or not coin.Parent or not hrp then return end
+    pcall(function()
+        firetouchinterest(hrp, coin, 0)
+        firetouchinterest(hrp, coin, 1)
         for _, part in ipairs(char:GetChildren()) do
             if part:IsA("BasePart") then
-                firetouchinterest(part, coin, 0); firetouchinterest(part, coin, 1)
+                firetouchinterest(part, coin, 0)
+                firetouchinterest(part, coin, 1)
             end
         end
     end)
-    return ok
-end
-
-local function attemptCollectCoin(coin, char, hrp)
-    if not coin or not coin.Parent or not char or not hrp then return false end
-    local before = getGameCoinCount()
-    for i = 1, 3 do
-        triggerUndergroundTouch(coin, char, hrp)
-        task.wait(0.06)
-    end
-    local deadline = tick() + 0.9
-    while tick() < deadline do
-        local now = getGameCoinCount()
-        if now and now > before then
-            collectedCoinsCount = now
-            if collectedCoinsCount >= COIN_MAX_LIMIT and not hasResetForMax then
-                hasResetForMax = true
-                pcall(function()
-                    local h = char:FindFirstChildOfClass("Humanoid")
-                    if h then h.Health = 0 end
-                end)
-            end
-            return true
-        end
-        task.wait(0.08)
-    end
-    blacklistedCoins[coin] = true
-    return false
 end
 
 -- MAIN FARM LOOP
 RunService.Heartbeat:Connect(function(dt)
     pcall(function()
         if not farmActive then return end
-
-        collectedCoinsCount = getGameCoinCount()
-        if collectedCoinsCount >= COIN_MAX_LIMIT and not hasResetForMax then
-            hasResetForMax = true
-            pcall(function()
-                local char = LocalPlayer.Character
-                if char and char:FindFirstChildOfClass("Humanoid") then
-                    char:FindFirstChildOfClass("Humanoid").Health = 0
-                end
-            end)
-            return
-        end
 
         local char = LocalPlayer.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -318,10 +276,6 @@ RunService.Heartbeat:Connect(function(dt)
             currentTargetCoin = nil
             cleanupPhysics()
             return
-        end
-
-        if currentTargetCoin and (not currentTargetCoin.Parent or not currentTargetCoin:IsDescendantOf(workspace)) then
-            currentTargetCoin = nil
         end
 
         hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
@@ -345,7 +299,7 @@ RunService.Heartbeat:Connect(function(dt)
                 currentTargetCoin = coin
                 coinTargetStartTime = tick()
             else
-                if tick() - coinTargetStartTime > 0.9 then
+                if tick() - coinTargetStartTime > 0.6 then
                     blacklistedCoins[coin] = true
                     currentTargetCoin = nil
                     return
@@ -359,24 +313,25 @@ RunService.Heartbeat:Connect(function(dt)
             local targetPos = Vector3.new(coin.Position.X, desiredY, coin.Position.Z)
             local delta = targetPos - hrp.Position
             local moveStep = math.min(delta.Magnitude, FARM_SPEED * dt)
-            if delta.Magnitude > 0.05 then hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * moveStep) else hrp.CFrame = CFrame.new(targetPos) end
+            
+            if delta.Magnitude > 0.05 then 
+                hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * moveStep) 
+            else 
+                hrp.CFrame = CFrame.new(targetPos) 
+            end
 
             hrp.AssemblyLinearVelocity = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
 
-            local horizDist = (Vector3.new(hrp.Position.X,0,hrp.Position.Z) - Vector3.new(coin.Position.X,0,coin.Position.Z)).Magnitude
-            if horizDist <= 1.5 and math.abs(hrp.Position.Y - coin.Position.Y) <= 6 then
-                local collected = attemptCollectCoin(coin, char, hrp)
-                if collected then blacklistedCoins[coin] = nil; currentTargetCoin = nil; return
-                else currentTargetCoin = nil; return end
-            end
+            -- لمس فوري ومستمر للعملة بدون توقف الكود
+            triggerTouchAsync(coin, char, hrp)
         end
     end)
 end)
 
 -- UI
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AmoChereebUltimateV73"
+ScreenGui.Name = "AmoChereebUltimateV74"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.IgnoreGuiInset = true
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
@@ -424,7 +379,7 @@ local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(1,-50,1,0)
 TitleText.Position = UDim2.new(0,15,0,0)
 TitleText.BackgroundTransparency = 1
-TitleText.Text = "⚡ عمو تشريب Hub - v73"
+TitleText.Text = "⚡ عمو تشريب Hub - v74"
 TitleText.TextColor3 = Color3.fromRGB(255,170,0)
 TitleText.Font = Enum.Font.GothamBold
 TitleText.TextSize = 15
