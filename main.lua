@@ -1,10 +1,10 @@
 --[[
-    عمو تشريب Hub - Mobile v60 REAL POP-COLLECT FIX
-    ==================================================
-    - Real Pop-Teleport Coin Collection (100% Working)
-    - Underground Safe Offset (8 Studs)
-    - Anti-Sky Fly & Anti-Lobby Void Fall
-    - Live Coin Tracker (Max 50) + Custom Icon
+    عمو تشريب Hub - Mobile v61 STRICT UNDERGROUND (NO TELEPORT)
+    ============================================================
+    - 100% Underground Farming (8 Studs) - Zero Teleport
+    - Touch Radius Expansion (Collects coins directly above)
+    - Smooth Movement (Speed 26) & Anti-Fly / Anti-Lobby Fall
+    - Live Coin Counter (Max 50) + Custom Icon
 --]]
 
 local Players = game:GetService("Players")
@@ -25,12 +25,11 @@ local farmActive = false
 local flingActive = true
 local smartRoleActive = true
 local antiAFKActive = true
-local isCollecting = false
 
 local collectedCoinsCount = 0
 local coinsCache = {}
 local lastCacheUpdate = 0
-local lastCollectTick = 0
+local lastTouchTick = 0
 
 -- ANTI-AFK SYSTEM
 task.spawn(function()
@@ -127,16 +126,12 @@ LocalPlayer.CharacterAdded:Connect(function()
     cleanupPhysics()
 end)
 
--- POP-TELEPORT COIN COLLECTOR (Instant Touch & Return)
-local function popCollectCoin(coin, char, hrp, hum)
-    if not coin or not coin.Parent or not hrp or isCollecting then return end
-    isCollecting = true
+-- STRICT UNDERGROUND TOUCH TRIGGER (NO TELEPORT)
+local function triggerUndergroundTouch(coin, char, hrp)
+    if not coin or not coin.Parent or not hrp then return end
     
-    local oldCFrame = hrp.CFrame
-    
-    -- Pop to coin position for 1 frame
     pcall(function()
-        hrp.CFrame = coin.CFrame
+        -- إرسال إشارات اللمس بين جميع أجزاء الجسم والعملة مباشرة
         firetouchinterest(hrp, coin, 0)
         firetouchinterest(hrp, coin, 1)
         
@@ -147,21 +142,12 @@ local function popCollectCoin(coin, char, hrp, hum)
             end
         end
     end)
-    
-    task.wait(0.016) -- 1 Frame delay for server registration
-    
-    -- Return immediately to underground safe position
-    pcall(function()
-        hrp.CFrame = oldCFrame
-    end)
-    
-    isCollecting = false
 end
 
--- MAIN FARM LOOP
+-- MAIN FARM LOOP (PURE UNDERGROUND)
 RunService.Heartbeat:Connect(function()
     pcall(function()
-        if not farmActive or isCollecting then return end
+        if not farmActive then return end
 
         local char = LocalPlayer.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -185,31 +171,32 @@ RunService.Heartbeat:Connect(function()
 
         local coin = getNearestCoin()
         if coin then
+            -- الموقع تحت الأرض بالضبط بـ 8 ستود
             local targetPos = Vector3.new(coin.Position.X, coin.Position.Y - UNDER_OFFSET, coin.Position.Z)
             local delta = targetPos - hrp.Position
             
-            -- Smooth Underground Teleport & Lock
-            if delta.Magnitude > 2 then
+            -- الحركة الانسيابية تحت الأرض فقط
+            if delta.Magnitude > 0.2 then
                 hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * math.min(delta.Magnitude, FARM_SPEED * 0.03))
             else
                 hrp.CFrame = CFrame.new(targetPos)
-                
-                -- Trigger Pop Collection when close enough underground
-                if tick() - lastCollectTick > 0.08 then
-                    lastCollectTick = tick()
-                    popCollectCoin(coin, char, hrp, hum)
-                end
             end
             
             hrp.AssemblyLinearVelocity = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
+
+            -- تفعيل اللمس التلقائي للعملة من أسفلها دون مغادرة مكانك
+            if tick() - lastTouchTick > 0.04 then
+                lastTouchTick = tick()
+                triggerUndergroundTouch(coin, char, hrp)
+            end
         end
     end)
 end)
 
 -- UI INTERFACE SETUP
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AmoChereebUltimateV60"
+ScreenGui.Name = "AmoChereebUltimateV61"
 ScreenGui.Parent = CoreGui
 ScreenGui.ResetOnSpawn = false
 
@@ -256,7 +243,7 @@ local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(1, -50, 1, 0)
 TitleText.Position = UDim2.new(0, 15, 0, 0)
 TitleText.BackgroundTransparency = 1
-TitleText.Text = "⚡ عمو تشريب Hub - v60"
+TitleText.Text = "⚡ عمو تشريب Hub - v61"
 TitleText.TextColor3 = Color3.fromRGB(255, 170, 0)
 TitleText.Font = Enum.Font.GothamBold
 TitleText.TextSize = 15
@@ -359,7 +346,7 @@ local function createToggle(yPos, text, icon, default, callback)
     end)
 end
 
-createToggle(0, "تجميع العملات التلقائي", "🪙", false, function(st)
+createToggle(0, "تجميع تحت الأرض (بدون تلبورت)", "🪙", false, function(st)
     farmActive = st
     if not st then
         cleanupPhysics()
