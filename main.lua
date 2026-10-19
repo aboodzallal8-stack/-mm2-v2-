@@ -1,11 +1,11 @@
 --[[
-    عمو تشريب Hub - Mobile v39 FLY + COLLECT
-    ==========================================
-    - Always fly (PlatformStand = true, no walk)
-    - Wall clip (noclip all parts)
-    - Real collect: brief stop on coin + firetouch from all parts
-    - 40 default speed (safe), dynamic for far
-    - All previous features (fling, zombie, sheriff, escape, anti-AFK)
+    عمو تشريب Hub - Mobile v40 TRUE FLY
+    =====================================
+    - Force Physics state (real fly, no walk)
+    - Stop walk animations
+    - High hover (8 studs above ground)
+    - Force-collect dummy part (works from far)
+    - All features
 --]]
 
 local Players = game:GetService("Players")
@@ -20,13 +20,11 @@ local LocalPlayer = Players.LocalPlayer
 -- ═══════════════════════════════════════
 -- CONFIG
 -- ═══════════════════════════════════════
-local walkSpeed = 40
-local FLY_SPEED = 40
-local FAR_SPEED = 120
-local VERY_FAR_SPEED = 220
-local COLLECT_DIST = 3
-local COLLECT_TIMEOUT = 0.5
-local STUCK_TIMEOUT = 2
+local walkSpeed = 60
+local FLY_SPEED = 60
+local HOVER_HEIGHT = 8
+local FORCE_COLLECT_RANGE = 20
+local DIP_THRESHOLD = 3
 local DANGER_DIST = 12
 local KNIFE_DANGER = 18
 local COIN_LIMIT = 50
@@ -45,12 +43,13 @@ local lastResetTime = 0
 local farmStartedAt = 0
 local lastCoinCount = 0
 local stuckCoins = {}
+local coinAttempts = {}
 local cachedMurderer = nil
 local cachedZombies = {}
 local currentCoin = nil
 local coinStartTime = 0
-local collectingCoin = false
-local collectStartTime = 0
+local lastForceTime = 0
+local lastForceCollect = 0
 local sheriffKillInProgress = false
 local activelyFlinging = {}
 local escapeTarget = nil
@@ -220,7 +219,6 @@ local function flingPlayer(player)
 
     task.spawn(function()
         local fakepart = Instance.new("Part")
-        fakepart.Name = "Fl_" .. key
         fakepart.Anchored = true
         fakepart.CanCollide = false
         fakepart.Transparency = 1
@@ -243,10 +241,6 @@ local function flingPlayer(player)
         body.Parent = fakepart
 
         pcall(function() hum:ChangeState(Enum.HumanoidStateType.StrafingNoPhysics) end)
-        pcall(function()
-            hrp.AssemblyLinearVelocity = Vector3.new(0, 1000000, 0)
-            hrp.Velocity = Vector3.new(0, 1000000, 0)
-        end)
 
         for i = 1, 150 do
             if not hrp.Parent or not hum.Parent or hum.Health <= 0 then break end
@@ -359,6 +353,23 @@ local function getNearestCoin()
     return closest
 end
 
+local function getCoinsInRange(pos, radius, maxCount)
+    local coins = getAllCoins()
+    local list = {}
+    for _, coin in ipairs(coins) do
+        local d = (coin.Position - pos).Magnitude
+        if d < radius then
+            table.insert(list, {coin = coin, dist = d})
+        end
+    end
+    table.sort(list, function(a, b) return a.dist < b.dist end)
+    local result = {}
+    for i = 1, math.min(maxCount, #list) do
+        table.insert(result, list[i].coin)
+    end
+    return result
+end
+
 local function getFarthestCoinFromPos(pos)
     local best, bestDist = nil, -1
     for _, coin in ipairs(getAllCoins()) do
@@ -388,6 +399,54 @@ local function getUICoinCount()
 end
 
 -- ═══════════════════════════════════════
+-- FORCE COLLECT (dummy part at coin)
+-- ═══════════════════════════════════════
+local function forceCollect(coin, char, hrp)
+    if not coin or not coin.Parent or not coin:IsDescendantOf(workspace) then return end
+    if not char or not hrp then return end
+
+    -- Create invisible part AT coin
+    local dummy = Instance.new("Part")
+    dummy.Name = "FC"
+    dummy.Size = Vector3.new(6, 6, 6)
+    dummy.CanCollide = false
+    dummy.CanTouch = true
+    dummy.CanQuery = false
+    dummy.Transparency = 1
+    dummy.Massless = true
+    dummy.Anchored = true
+    dummy.CFrame = coin.CFrame
+    dummy.Parent = char  -- part of character
+
+    -- Fire touch from dummy
+    pcall(function()
+        firetouchinterest(dummy, coin, 0)
+        firetouchinterest(dummy, coin, 1)
+    end)
+
+    -- Also fire from HRP
+    pcall(function()
+        firetouchinterest(hrp, coin, 0)
+        firetouchinterest(hrp, coin, 1)
+    end)
+
+    -- Also from all body parts
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") and part ~= dummy and part ~= hrp then
+            pcall(function()
+                firetouchinterest(part, coin, 0)
+                firetouchinterest(part, coin, 1)
+            end)
+        end
+    end
+
+    -- Cleanup
+    task.delay(0.15, function()
+        if dummy and dummy.Parent then dummy:Destroy() end
+    end)
+end
+
+-- ═══════════════════════════════════════
 -- HANDLE 50
 -- ═══════════════════════════════════════
 local function handle50Coins()
@@ -403,7 +462,7 @@ local function handle50Coins()
         for i = 1, 80 do killAll(isPlayerZombie); task.wait(0.05) end
         if hum then hum.PlatformStand = false; hum.WalkSpeed = 16 end
         if hum and hum.Health > 0 then pcall(function() hum.Health = 0 end) end
-        task.wait(3); pendingRespawn = false; stuckCoins = {}; farmStartedAt = tick(); currentCoin = nil; lastCoinCount = 0; collectingCoin = false
+        task.wait(3); pendingRespawn = false; stuckCoins = {}; farmStartedAt = tick(); currentCoin = nil; lastCoinCount = 0
         return
     end
 
@@ -411,7 +470,7 @@ local function handle50Coins()
         for i = 1, 80 do killAll(nil); task.wait(0.05) end
         if hum then hum.PlatformStand = false; hum.WalkSpeed = 16 end
         if hum and hum.Health > 0 then pcall(function() hum.Health = 0 end) end
-        task.wait(3); pendingRespawn = false; stuckCoins = {}; farmStartedAt = tick(); currentCoin = nil; lastCoinCount = 0; collectingCoin = false
+        task.wait(3); pendingRespawn = false; stuckCoins = {}; farmStartedAt = tick(); currentCoin = nil; lastCoinCount = 0
         return
     end
 
@@ -420,7 +479,7 @@ local function handle50Coins()
             killNearestEnemy()
             if hum then hum.PlatformStand = false; hum.WalkSpeed = 16 end
             if hum and hum.Health > 0 then pcall(function() hum.Health = 0 end) end
-            task.wait(3); pendingRespawn = false; stuckCoins = {}; farmStartedAt = tick(); currentCoin = nil; lastCoinCount = 0; collectingCoin = false
+            task.wait(3); pendingRespawn = false; stuckCoins = {}; farmStartedAt = tick(); currentCoin = nil; lastCoinCount = 0
             return
         end
     end
@@ -432,11 +491,11 @@ local function handle50Coins()
         end
     end
     if hum and hum.Health > 0 then pcall(function() hum.Health = 0 end) end
-    task.wait(3); pendingRespawn = false; stuckCoins = {}; farmStartedAt = tick(); currentCoin = nil; lastCoinCount = 0; collectingCoin = false
+    task.wait(3); pendingRespawn = false; stuckCoins = {}; farmStartedAt = tick(); currentCoin = nil; lastCoinCount = 0
 end
 
 -- ═══════════════════════════════════════
--- FARM LOOP (FLY + COLLECT state machine)
+-- FARM LOOP (TRUE FLY - 8 studs above ground)
 -- ═══════════════════════════════════════
 RunService.Heartbeat:Connect(function()
     pcall(function()
@@ -458,8 +517,8 @@ RunService.Heartbeat:Connect(function()
             else
                 phase = "farming"
                 stuckCoins = {}
+                coinAttempts = {}
                 currentCoin = nil
-                collectingCoin = false
                 farmStartedAt = tick()
                 lastCoinCount = 0
             end
@@ -478,8 +537,8 @@ RunService.Heartbeat:Connect(function()
         if lastCoinCount == 0 and #allCoins > 5 then
             farmStartedAt = tick()
             stuckCoins = {}
+            coinAttempts = {}
             currentCoin = nil
-            collectingCoin = false
         end
         lastCoinCount = #allCoins
 
@@ -517,58 +576,49 @@ RunService.Heartbeat:Connect(function()
             end
         end
 
-        -- ═══ ALWAYS FLY MODE ═══
+        -- ═══ TRUE FLY MODE - Force Physics state ═══
         hum.PlatformStand = true
         hum.WalkSpeed = 0
         hum.JumpPower = 0
+        hum.JumpHeight = 0
         hum.AutoRotate = false
+        pcall(function() hum:ChangeState(Enum.HumanoidStateType.Physics) end)
 
-        -- Noclip everything (wall clip)
+        -- Stop walk animations
+        pcall(function()
+            local animator = hum:FindFirstChildOfClass("Animator")
+            if animator then
+                for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+                    local name = ""
+                    if track.Animation then name = track.Animation.Name:lower() end
+                    if name:find("walk") or name:find("run") or name:find("jump") then
+                        track:Stop()
+                    end
+                end
+            end
+        end)
+
+        -- Noclip all parts
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") then
                 if part.CanCollide then part.CanCollide = false end
             end
         end
 
-        -- ═══ COLLECTING STATE ═══
-        if collectingCoin then
-            local target = currentCoin
-            if not target or not target:IsDescendantOf(workspace) then
-                -- ✅ Collected successfully
-                collectingCoin = false
-                currentCoin = nil
-                coinStartTime = tick()
-                return
-            end
-
-            -- Stay positioned ON the coin (for touch)
-            hrp.CFrame = CFrame.new(target.Position + Vector3.new(0, 0.5, 0))
-            hrp.Velocity = Vector3.zero
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.RotVelocity = Vector3.zero
-
-            -- Fire touch from ALL body parts
-            for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") then
-                    pcall(function() firetouchinterest(part, target, 0) end)
-                    pcall(function() firetouchinterest(part, target, 1) end)
+        -- ═══ FORCE COLLECT (every 0.15s) ═══
+        if tick() - lastForceCollect > 0.15 then
+            lastForceCollect = tick()
+            local nearby = getCoinsInRange(hrp.Position, FORCE_COLLECT_RANGE, 3)
+            for _, coin in ipairs(nearby) do
+                forceCollect(coin, char, hrp)
+                coinAttempts[coin] = (coinAttempts[coin] or 0) + 1
+                if coinAttempts[coin] > 15 then
+                    stuckCoins[coin] = true
                 end
             end
-            -- Also from HRP directly
-            pcall(function() firetouchinterest(hrp, target, 0) end)
-            pcall(function() firetouchinterest(hrp, target, 1) end)
-
-            -- Timeout after 0.5s → skip
-            if tick() - collectStartTime > COLLECT_TIMEOUT then
-                stuckCoins[target] = true
-                collectingCoin = false
-                currentCoin = nil
-                coinStartTime = tick()
-            end
-            return
         end
 
-        -- ═══ FIND COIN ═══
+        -- ═══ FLY to nearest coin (hover high) ═══
         local target = currentCoin
         if escapeTarget and tick() < escapeUntil then
             target = escapeTarget
@@ -583,43 +633,34 @@ RunService.Heartbeat:Connect(function()
         if not target then return end
         currentCoin = target
 
-        local targetPos = target.Position + Vector3.new(0, 1.5, 0)
+        local targetPos = target.Position + Vector3.new(0, HOVER_HEIGHT, 0)
         local delta = targetPos - hrp.Position
         local dist = delta.Magnitude
 
-        -- Close enough → start collecting
-        if dist < COLLECT_DIST then
-            collectingCoin = true
-            collectStartTime = tick()
-            return
+        if dist > 1 then
+            local step = math.min(FLY_SPEED / 60, dist - 0.5)
+            if step > 0 then
+                hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * step)
+            end
         end
 
-        -- ═══ FLY (dynamic speed) ═══
-        local speed = FLY_SPEED
-        if dist > 50 then speed = FAR_SPEED end
-        if dist > 150 then speed = VERY_FAR_SPEED end
-
-        local step = math.min(speed / 60, dist - 1)
-        if step > 0 then
-            hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * step)
-        end
         hrp.Velocity = Vector3.zero
         hrp.AssemblyLinearVelocity = Vector3.zero
         hrp.RotVelocity = Vector3.zero
 
-        -- Anti-sky (if fly too high, reset)
-        if hrp.Position.Y > target.Position.Y + 30 then
-            hrp.CFrame = CFrame.new(hrp.Position.X, target.Position.Y + 3, hrp.Position.Z)
+        -- Anti-sky
+        if hrp.Position.Y > target.Position.Y + HOVER_HEIGHT + 25 then
+            hrp.CFrame = CFrame.new(hrp.Position.X, target.Position.Y + HOVER_HEIGHT, hrp.Position.Z)
             hrp.Velocity = Vector3.zero
         end
         -- Anti-fall
         if hrp.Position.Y < -50 then
-            hrp.CFrame = CFrame.new(target.Position + Vector3.new(0, 3, 0))
+            hrp.CFrame = CFrame.new(target.Position + Vector3.new(0, HOVER_HEIGHT, 0))
             hrp.Velocity = Vector3.zero
         end
 
-        -- Stuck coin (2s timeout while flying towards it)
-        if tick() - coinStartTime > STUCK_TIMEOUT then
+        -- Stuck coin
+        if tick() - coinStartTime > 3 then
             stuckCoins[target] = true
             currentCoin = nil
         end
@@ -864,7 +905,7 @@ Instance.new("UICorner", SpeedBox).CornerRadius = UDim.new(0, 10)
 
 SpeedBox.FocusLost:Connect(function()
     local n = tonumber(SpeedBox.Text)
-    if n and n >= 10 and n <= 60 then
+    if n and n >= 20 and n <= 100 then
         walkSpeed = n
         FLY_SPEED = n
     else
@@ -878,23 +919,28 @@ local FarmBtn = makeToggle(56, "طيران + جمع + هروب", "✈️", false
         phase = "scanning"
         scanStart = tick()
         stuckCoins = {}
+        coinAttempts = {}
         currentCoin = nil
-        collectingCoin = false
         farmStartedAt = tick()
         lastCoinCount = 0
         escapeTarget = nil
+        lastForceCollect = 0
     else
         phase = "idle"
         local char = LocalPlayer.Character
         if char then
             local hum = char:FindFirstChildOfClass("Humanoid")
-            if hum then hum.PlatformStand = false; hum.WalkSpeed = 16 end
+            if hum then
+                hum.PlatformStand = false
+                hum.WalkSpeed = 16
+                hum.JumpPower = 50
+                pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+            end
             for _, part in ipairs(char:GetDescendants()) do
                 if part:IsA("BasePart") then part.CanCollide = true end
             end
         end
         currentCoin = nil
-        collectingCoin = false
     end
 end)
 
@@ -1000,13 +1046,12 @@ local function updateCoinInfo()
     else roleTag = " 👤"
     end
     local escapeTag = escapeTarget and " 🏃" or ""
-    local collectTag = collectingCoin and " ✋" or ""
     local lobbyTag = (mapCount == 0) and " (لوبي)" or ""
     local phaseTag = ""
     if phase == "scanning" then phaseTag = " 🔍"
     elseif phase == "farming" then phaseTag = " 🌾"
     end
-    CoinInfo.Text = "🪙 " .. displayCount .. "/" .. displayMax .. roleTag .. escapeTag .. collectTag .. phaseTag .. lobbyTag
+    CoinInfo.Text = "🪙 " .. displayCount .. "/" .. displayMax .. roleTag .. escapeTag .. phaseTag .. lobbyTag
 end
 
 RunService.Heartbeat:Connect(function()
@@ -1016,7 +1061,6 @@ end)
 LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(0.5)
     currentCoin = nil
-    collectingCoin = false
     sheriffKillInProgress = false
     activelyFlinging = {}
     escapeTarget = nil
