@@ -1,10 +1,10 @@
 --[[
-    عمو تشريب Hub - Mobile Edition
-    - Floating draggable circle button
-    - Auto farm (max 50) with auto reset
-    - Auto fling murderer (if you're innocent)
-    - NEW: If you're murderer, fling ALL players when bag full then reset
-    - Walk speed control (default 27)
+    عمو تشريب Hub - Mobile Edition v2
+    - Clean GUI with clear ON/OFF indicators
+    - Auto farm (max 50) for ALL roles
+    - Murderer mode: fling all players before reset
+    - Walk speed 27 (editable)
+    - Farm persists through death
     - Anti-AFK included
 --]]
 
@@ -22,15 +22,16 @@ local Camera = workspace.CurrentCamera
 -- ========== Config ==========
 local CoinLimit = 50
 local walkSpeed = 27
-local flyDistance = 100
+local FLY_DISTANCE = 120 -- ثابت داخلياً (لا يوجد خيار في الواجهة)
 
 -- ========== States ==========
 local farmActive = false
 local autoFlingActive = false
-local murdererAutoFlingActive = true   -- الميزة الجديدة (مفعلة افتراضياً)
+local murdererAutoFlingActive = false -- افتراضي OFF (تقدر تفعلها)
 local antiAFKActive = true
 local pendingRespawn = false
 local flingCooldown = 0
+local farmWasActive = false -- لتتبع حالة الفارم عند الموت
 
 -- ========== Anti-AFK ==========
 task.spawn(function()
@@ -45,7 +46,7 @@ task.spawn(function()
     end
 end)
 
--- ========== Speed System (auto 27) ==========
+-- ========== Speed System ==========
 local function applySpeed()
     local char = LocalPlayer.Character
     if char then
@@ -57,18 +58,15 @@ end
 applySpeed()
 
 RunService.Heartbeat:Connect(function()
-    local char = LocalPlayer.Character
-    if char then
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum and hum.WalkSpeed ~= walkSpeed then
-            pcall(function() hum.WalkSpeed = walkSpeed end)
+    pcall(function()
+        local char = LocalPlayer.Character
+        if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum and hum.WalkSpeed ~= walkSpeed then
+                hum.WalkSpeed = walkSpeed
+            end
         end
-    end
-end)
-
-LocalPlayer.CharacterAdded:Connect(function()
-    task.wait(0.5)
-    applySpeed()
+    end)
 end)
 
 -- ========== Fling System ==========
@@ -85,11 +83,11 @@ local function flingTarget(targetPlayer)
     bv.Parent = hrp
 
     task.spawn(function()
-        for i = 1, 80 do
+        for i = 1, 100 do
             if not hrp.Parent then break end
             pcall(function()
                 hrp.CFrame = hrp.CFrame * CFrame.Angles(math.rad(90), math.rad(45), math.rad(30))
-                hrp.Velocity = Vector3.new(math.random(-2000, 2000), 3000, math.random(-2000, 2000))
+                hrp.Velocity = Vector3.new(math.random(-2500, 2500), 3500, math.random(-2500, 2500))
             end)
             task.wait(0.015)
         end
@@ -126,17 +124,20 @@ local function isLocalMurderer()
 end
 
 local function flingAllOtherPlayers()
+    local count = 0
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
             local hum = player.Character:FindFirstChildOfClass("Humanoid")
             if hum and hum.Health > 0 then
                 flingTarget(player)
+                count = count + 1
             end
         end
     end
+    return count
 end
 
--- فلنك القاتل (لما تكون بريء)
+-- فلنك القاتل (لما تكون بريء/شريف)
 task.spawn(function()
     while true do
         task.wait(1)
@@ -150,7 +151,7 @@ task.spawn(function()
                     local murdRoot = murdChar:FindFirstChild("HumanoidRootPart")
                     if myRoot and murdRoot then
                         local dist = (myRoot.Position - murdRoot.Position).Magnitude
-                        if dist < 200 then
+                        if dist < 250 then
                             flingTarget(murderer)
                             flingCooldown = tick()
                         end
@@ -194,19 +195,19 @@ task.spawn(function()
     end
 end)
 
--- Main panel
+-- Main panel (bigger for cleaner layout)
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 320, 0, 370)
-MainFrame.Position = UDim2.new(0.5, -160, 0.5, -185)
+MainFrame.Size = UDim2.new(0, 340, 0, 390)
+MainFrame.Position = UDim2.new(0.5, -170, 0.5, -195)
 MainFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Visible = false
 MainFrame.ClipsDescendants = true
 MainFrame.Parent = ScreenGui
-Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 18)
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 20)
 
--- Gold border
+-- Gold border glow
 local GoldBorder = Instance.new("Frame")
 GoldBorder.Size = UDim2.new(1, 6, 1, 6)
 GoldBorder.Position = UDim2.new(0, -3, 0, -3)
@@ -214,7 +215,7 @@ GoldBorder.BackgroundColor3 = Color3.fromRGB(212, 175, 55)
 GoldBorder.BorderSizePixel = 0
 GoldBorder.BackgroundTransparency = 0.25
 GoldBorder.Parent = MainFrame
-Instance.new("UICorner", GoldBorder).CornerRadius = UDim.new(0, 20)
+Instance.new("UICorner", GoldBorder).CornerRadius = UDim.new(0, 22)
 
 task.spawn(function()
     while GoldBorder.Parent do
@@ -230,35 +231,36 @@ end)
 
 -- Title bar
 local TitleBar = Instance.new("Frame")
-TitleBar.Size = UDim2.new(1, 0, 0, 40)
+TitleBar.Size = UDim2.new(1, 0, 0, 44)
 TitleBar.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
 TitleBar.BorderSizePixel = 0
 TitleBar.Parent = MainFrame
-Instance.new("UICorner", TitleBar).CornerRadius = UDim.new(0, 18)
+Instance.new("UICorner", TitleBar).CornerRadius = UDim.new(0, 20)
 
 local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1, -50, 1, 0)
 Title.Position = UDim2.new(0, 15, 0, 0)
 Title.BackgroundTransparency = 1
-Title.Text = "عمو تشريب Hub"
+Title.Text = "🥷 عمو تشريب Hub"
 Title.TextColor3 = Color3.fromRGB(212, 175, 55)
 Title.Font = Enum.Font.GothamBold
-Title.TextSize = 20
+Title.TextSize = 18
+Title.TextXAlignment = Enum.TextXAlignment.Left
 Title.Parent = TitleBar
 
 local CloseBtn = Instance.new("TextButton")
-CloseBtn.Size = UDim2.new(0, 32, 0, 32)
-CloseBtn.Position = UDim2.new(1, -36, 0, 4)
+CloseBtn.Size = UDim2.new(0, 34, 0, 34)
+CloseBtn.Position = UDim2.new(1, -40, 0, 5)
 CloseBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
 CloseBtn.Text = "✕"
 CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 CloseBtn.Font = Enum.Font.GothamBold
 CloseBtn.TextSize = 18
 CloseBtn.Parent = TitleBar
-Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 16)
+Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 17)
 CloseBtn.MouseButton1Click:Connect(function() MainFrame.Visible = false end)
 
--- Drag system (touch + mouse)
+-- Drag
 local function makeDraggable(handle, target)
     local dragging = false
     local dragStart, startPos
@@ -283,118 +285,141 @@ local function makeDraggable(handle, target)
 end
 makeDraggable(TitleBar, MainFrame)
 
--- Helpers
-local function makeLabel(yPos, text, icon)
-    local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(0, 170, 0, 30)
-    lbl.Position = UDim2.new(0, 12, 0, yPos)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = icon and (icon .. " " .. text) or text
-    lbl.TextColor3 = Color3.fromRGB(200, 200, 200)
-    lbl.Font = Enum.Font.Gotham
-    lbl.TextSize = 13
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.Parent = MainFrame
-    return lbl
+-- Better toggle button design
+local function makeToggle(yPos, text, icon, defaultState, callback)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, -24, 0, 52)
+    btn.Position = UDim2.new(0, 12, 0, yPos)
+    btn.BackgroundColor3 = defaultState and Color3.fromRGB(25, 70, 25) or Color3.fromRGB(22, 22, 22)
+    btn.BorderSizePixel = 2
+    btn.BorderColor3 = defaultState and Color3.fromRGB(80, 220, 80) or Color3.fromRGB(50, 50, 50)
+    btn.Text = ""
+    btn.AutoButtonColor = false
+    btn.Parent = MainFrame
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 14)
+
+    -- Icon (right side for Arabic)
+    local iconLbl = Instance.new("TextLabel")
+    iconLbl.Size = UDim2.new(0, 44, 1, 0)
+    iconLbl.Position = UDim2.new(1, -46, 0, 0)
+    iconLbl.BackgroundTransparency = 1
+    iconLbl.Text = icon
+    iconLbl.TextSize = 26
+    iconLbl.Font = Enum.Font.GothamBold
+    iconLbl.Parent = btn
+
+    -- Text (right aligned for Arabic)
+    local textLbl = Instance.new("TextLabel")
+    textLbl.Size = UDim2.new(0, 220, 1, 0)
+    textLbl.Position = UDim2.new(0, 12, 0, 0)
+    textLbl.BackgroundTransparency = 1
+    textLbl.Text = text
+    textLbl.TextColor3 = Color3.fromRGB(230, 230, 230)
+    textLbl.Font = Enum.Font.GothamBold
+    textLbl.TextSize = 14
+    textLbl.TextXAlignment = Enum.TextXAlignment.Right
+    textLbl.Parent = btn
+
+    -- Status dot
+    local dot = Instance.new("Frame")
+    dot.Size = UDim2.new(0, 12, 0, 12)
+    dot.Position = UDim2.new(0, 14, 0.5, -6)
+    dot.BackgroundColor3 = defaultState and Color3.fromRGB(80, 220, 80) or Color3.fromRGB(100, 100, 100)
+    dot.BorderSizePixel = 0
+    dot.Parent = btn
+    Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+
+    local state = defaultState
+
+    local function updateVisual()
+        btn.BackgroundColor3 = state and Color3.fromRGB(25, 70, 25) or Color3.fromRGB(22, 22, 22)
+        btn.BorderColor3 = state and Color3.fromRGB(80, 220, 80) or Color3.fromRGB(50, 50, 50)
+        dot.BackgroundColor3 = state and Color3.fromRGB(80, 220, 80) or Color3.fromRGB(100, 100, 100)
+    end
+
+    btn.MouseButton1Click:Connect(function()
+        state = not state
+        updateVisual()
+        callback(state)
+    end)
+
+    return btn, function() return state end
 end
 
-local function makeTextBox(yPos, default)
-    local tb = Instance.new("TextBox")
-    tb.Size = UDim2.new(0, 75, 0, 32)
-    tb.Position = UDim2.new(1, -90, 0, yPos)
-    tb.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-    tb.BorderSizePixel = 1
-    tb.BorderColor3 = Color3.fromRGB(60, 60, 60)
-    tb.Text = default
-    tb.TextColor3 = Color3.fromRGB(212, 175, 55)
-    tb.Font = Enum.Font.GothamBold
-    tb.TextSize = 15
-    tb.Parent = MainFrame
-    Instance.new("UICorner", tb).CornerRadius = UDim.new(0, 8)
-    return tb
-end
+-- Speed setting
+local SpeedLabel = Instance.new("TextLabel")
+SpeedLabel.Size = UDim2.new(0, 170, 0, 34)
+SpeedLabel.Position = UDim2.new(0, 12, 0, 56)
+SpeedLabel.BackgroundTransparency = 1
+SpeedLabel.Text = "⚡ سرعة المشي"
+SpeedLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+SpeedLabel.Font = Enum.Font.GothamBold
+SpeedLabel.TextSize = 14
+SpeedLabel.TextXAlignment = Enum.TextXAlignment.Right
+SpeedLabel.Parent = MainFrame
 
--- Speed
-local speedLabel = makeLabel(50, "سرعة المشي", "⚡")
-local speedBox = makeTextBox(50, "27")
-speedBox.FocusLost:Connect(function()
-    local n = tonumber(speedBox.Text)
+local SpeedBox = Instance.new("TextBox")
+SpeedBox.Size = UDim2.new(0, 80, 0, 34)
+SpeedBox.Position = UDim2.new(1, -100, 0, 56)
+SpeedBox.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+SpeedBox.BorderSizePixel = 2
+SpeedBox.BorderColor3 = Color3.fromRGB(212, 175, 55)
+SpeedBox.Text = tostring(walkSpeed)
+SpeedBox.TextColor3 = Color3.fromRGB(212, 175, 55)
+SpeedBox.Font = Enum.Font.GothamBold
+SpeedBox.TextSize = 16
+SpeedBox.Parent = MainFrame
+Instance.new("UICorner", SpeedBox).CornerRadius = UDim.new(0, 10)
+
+SpeedBox.FocusLost:Connect(function()
+    local n = tonumber(SpeedBox.Text)
     if n and n >= 16 and n <= 100 then
         walkSpeed = n
         applySpeed()
     else
-        speedBox.Text = tostring(walkSpeed)
+        SpeedBox.Text = tostring(walkSpeed)
     end
 end)
 
--- Fly distance
-local flyLabel = makeLabel(88, "مسافة الطيران", "✈️")
-local flyBox = makeTextBox(88, "100")
-flyBox.FocusLost:Connect(function()
-    local n = tonumber(flyBox.Text)
-    if n and n >= 30 and n <= 1000 then
-        flyDistance = n
-    else
-        flyBox.Text = tostring(flyDistance)
+-- Toggle buttons
+local FarmBtn, getFarmState = makeToggle(100, "جمع تلقائي", "🌾", false, function(state)
+    farmActive = state
+    if state then
+        farmWasActive = true
     end
 end)
 
--- Toggle helper
-local function makeToggle(yPos, text, icon, callback)
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, -24, 0, 44)
-    btn.Position = UDim2.new(0, 12, 0, yPos)
-    btn.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-    btn.BorderSizePixel = 2
-    btn.BorderColor3 = Color3.fromRGB(60, 60, 60)
-    btn.Text = icon and (icon .. " " .. text) or text
-    btn.TextColor3 = Color3.fromRGB(220, 220, 220)
-    btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 14
-    btn.AutoButtonColor = false
-    btn.Parent = MainFrame
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
-    btn.MouseButton1Click:Connect(callback)
-    return btn
-end
-
-local FarmBtn = makeToggle(126, "جمع تلقائي : OFF", "🌾", function()
-    farmActive = not farmActive
-    FarmBtn.Text = farmActive and "🌾 جمع تلقائي : ON" or "🌾 جمع تلقائي : OFF"
-    FarmBtn.BorderColor3 = farmActive and Color3.fromRGB(212, 175, 55) or Color3.fromRGB(60, 60, 60)
+local FlingMurdererBtn, getFlingMurdererState = makeToggle(160, "فلنك القاتل", "💥", false, function(state)
+    autoFlingActive = state
 end)
 
-local FlingBtn = makeToggle(175, "فلنك القاتل : OFF", "💥", function()
-    autoFlingActive = not autoFlingActive
-    FlingBtn.Text = autoFlingActive and "💥 فلنك القاتل : ON" or "💥 فلنك القاتل : OFF"
-    FlingBtn.BorderColor3 = autoFlingActive and Color3.fromRGB(212, 175, 55) or Color3.fromRGB(60, 60, 60)
+local MurdererFlingAllBtn, getMurdererFlingAllState = makeToggle(220, "فلنك الكل كقاتل", "🔪", false, function(state)
+    murdererAutoFlingActive = state
 end)
 
--- ✅ الميزة الجديدة: فلنك الكل عند القتل (لما تكون أنت القاتل)
-local MurdererAutoFlingBtn = makeToggle(224, "فلنك الكل كقاتل : ON", "🔪", function()
-    murdererAutoFlingActive = not murdererAutoFlingActive
-    MurdererAutoFlingBtn.Text = murdererAutoFlingActive and "🔪 فلنك الكل كقاتل : ON" or "🔪 فلنك الكل كقاتل : OFF"
-    MurdererAutoFlingBtn.BorderColor3 = murdererAutoFlingActive and Color3.fromRGB(212, 175, 55) or Color3.fromRGB(60, 60, 60)
+local AFKBtn, getAFKState = makeToggle(280, "مكافحة الطرد", "⏳", true, function(state)
+    antiAFKActive = state
 end)
-MurdererAutoFlingBtn.BorderColor3 = Color3.fromRGB(212, 175, 55)
 
-local AFKBtn = makeToggle(273, "مكافحة الطرد : ON", "⏳", function()
-    antiAFKActive = not antiAFKActive
-    AFKBtn.Text = antiAFKActive and "⏳ مكافحة الطرد : ON" or "⏳ مكافحة الطرد : OFF"
-    AFKBtn.BorderColor3 = antiAFKActive and Color3.fromRGB(212, 175, 55) or Color3.fromRGB(60, 60, 60)
-end)
-AFKBtn.BorderColor3 = Color3.fromRGB(212, 175, 55)
+-- Coin info (bottom)
+local CoinPanel = Instance.new("Frame")
+CoinPanel.Size = UDim2.new(1, -24, 0, 40)
+CoinPanel.Position = UDim2.new(0, 12, 0, 344)
+CoinPanel.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+CoinPanel.BorderSizePixel = 2
+CoinPanel.BorderColor3 = Color3.fromRGB(212, 175, 55)
+CoinPanel.Parent = MainFrame
+Instance.new("UICorner", CoinPanel).CornerRadius = UDim.new(0, 12)
 
--- Coin info
 local CoinInfo = Instance.new("TextLabel")
-CoinInfo.Size = UDim2.new(1, -24, 0, 26)
-CoinInfo.Position = UDim2.new(0, 12, 0, 330)
+CoinInfo.Size = UDim2.new(1, -12, 1, 0)
+CoinInfo.Position = UDim2.new(0, 6, 0, 0)
 CoinInfo.BackgroundTransparency = 1
-CoinInfo.Text = "🪙 القطع: 0/50 | الأقرب: N/A"
+CoinInfo.Text = "🪙 0 / 50"
 CoinInfo.TextColor3 = Color3.fromRGB(212, 175, 55)
 CoinInfo.Font = Enum.Font.GothamBold
-CoinInfo.TextSize = 12
-CoinInfo.Parent = MainFrame
+CoinInfo.TextSize = 15
+CoinInfo.Parent = CoinPanel
 
 -- Float button drag/tap
 local floatDragging = false
@@ -414,10 +439,11 @@ FloatBtn.InputBegan:Connect(function(input)
                 floatEmergencyFired = true
                 farmActive = false
                 autoFlingActive = false
-                FarmBtn.Text = "🌾 جمع تلقائي : OFF"
-                FlingBtn.Text = "💥 فلنك القاتل : OFF"
-                FarmBtn.BorderColor3 = Color3.fromRGB(60, 60, 60)
-                FlingBtn.BorderColor3 = Color3.fromRGB(60, 60, 60)
+                -- Visual reset
+                FarmBtn.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+                FarmBtn.BorderColor3 = Color3.fromRGB(50, 50, 50)
+                FlingMurdererBtn.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+                FlingMurdererBtn.BorderColor3 = Color3.fromRGB(50, 50, 50)
             end
         end)
     end
@@ -465,7 +491,7 @@ local function getNearestCoin()
     return closest, dist
 end
 
--- ✅ التعديل الجديد: لو أنت القاتل والميزة شغالة → فلنك الكل قبل الريست
+-- Auto Reset (works for ALL roles, flings all if murderer + option on)
 local function doAutoRespawn()
     if pendingRespawn then return end
     pendingRespawn = true
@@ -473,8 +499,8 @@ local function doAutoRespawn()
     local wasMurderer = isLocalMurderer()
 
     if wasMurderer and murdererAutoFlingActive then
-        flingAllOtherPlayers()
-        task.wait(1.2)  -- ننتظر شوي عشان الفلنك يأثر
+        pcall(flingAllOtherPlayers)
+        task.wait(1.5) -- give fling time to kill everyone
     end
 
     local char = LocalPlayer.Character
@@ -486,9 +512,15 @@ local function doAutoRespawn()
     end
     task.wait(3)
     pendingRespawn = false
+
+    -- Continue farming after respawn (if farm was on)
+    if farmActive then
+        task.wait(0.5)
+        applySpeed()
+    end
 end
 
--- Reset on bag full (event-based)
+-- Event-based reset (fires whenever bag reaches max, for any role)
 task.spawn(function()
     local remotes = ReplicatedStorage:WaitForChild("Remotes", 10)
     if not remotes then return end
@@ -503,7 +535,7 @@ task.spawn(function()
     end)
 end)
 
--- Polling backup
+-- Polling backup (in case event fails)
 task.spawn(function()
     while true do
         task.wait(0.3)
@@ -530,48 +562,64 @@ task.spawn(function()
     end
 end)
 
--- Farm loop
+-- Main farm loop (persists through death)
 task.spawn(function()
     while true do
         task.wait(0.08)
-        if farmActive and not pendingRespawn then
-            local coin = getNearestCoin()
-            if coin then
-                local hrp = getHRP()
-                if hrp then
-                    hrp.CFrame = coin.CFrame + Vector3.new(0, 2, 0)
-                    task.wait(0.04)
+        pcall(function()
+            if farmActive and not pendingRespawn then
+                local coin = getNearestCoin()
+                if coin then
+                    local hrp = getHRP()
+                    if hrp then
+                        hrp.CFrame = coin.CFrame + Vector3.new(0, 2, 0)
+                        task.wait(0.04)
+                    end
                 end
             end
-        end
+        end)
     end
 end)
 
--- Coin info
+-- Coin info display
 local function updateCoinInfo()
     local count = 0
-    local nearText = "N/A"
     local hrp = getHRP()
     if hrp then
-        local closest = math.huge
         for _, map in ipairs(workspace:GetChildren()) do
             if map:FindFirstChild("CoinContainer") then
                 for _, coin in ipairs(map.CoinContainer:GetChildren()) do
                     if coin:IsA("BasePart") and coin:FindFirstChild("TouchInterest") then
                         count = count + 1
-                        local d = (hrp.Position - coin.Position).Magnitude
-                        if d < closest then closest = d end
                     end
                 end
             end
         end
-        if closest ~= math.huge then nearText = math.floor(closest) .. " studs" end
     end
-    CoinInfo.Text = "🪙 القطع: " .. count .. "/50 | الأقرب: " .. nearText
+    -- Get current bag value if available
+    local bagTxt = "0"
+    local mainGui = LocalPlayer.PlayerGui:FindFirstChild("MainGUI")
+    if mainGui and mainGui:FindFirstChild("Game") and mainGui.Game:FindFirstChild("CoinBags") then
+        for _, bag in ipairs(mainGui.Game.CoinBags:GetDescendants()) do
+            if bag:IsA("TextLabel") and bag.Name == "Coins" then
+                local cur = bag.Text:match("(%d+)")
+                if cur then bagTxt = cur end
+            end
+        end
+    end
+    CoinInfo.Text = "🪙 " .. bagTxt .. " / 50  •  الخريطة: " .. count
 end
 
 RunService.Heartbeat:Connect(function()
-    pcall(function()
-        updateCoinInfo()
-    end)
+    pcall(updateCoinInfo)
+end)
+
+-- ========== Respawn handler ==========
+LocalPlayer.CharacterAdded:Connect(function(char)
+    task.wait(0.5)
+    applySpeed()
+    -- If farm was on before death, continue
+    if farmActive and not pendingRespawn then
+        task.wait(0.3)
+    end
 end)
