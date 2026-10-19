@@ -1,7 +1,9 @@
 --[[
-    عمو تشريب Hub - Mobile v19 FINAL-FINAL
-    - Force CFrame fly (every frame, no resistance)
-    - Direct CFrame fling (loop 0.05s, no BodyVelocity)
+    عمو تشريب Hub - Mobile v20 CLEAN 3 SYSTEMS
+    ============================================
+    System 1: FLY (Stepped + CFrame forced)
+    System 2: COINS (teleport-first + fly-rest)
+    System 3: FLING (comprehensive detect + CFrame to sky 0.05s)
 --]]
 
 local Players = game:GetService("Players")
@@ -12,23 +14,29 @@ local CoreGui = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
 
--- ========== Config ==========
-local FLY_SPEED = 27
-local HOVER_HEIGHT = 2
-local COLLECT_RADIUS = 5
+-- ═══════════════════════════════════════════════
+-- CONFIG
+-- ═══════════════════════════════════════════════
+local walkSpeed = 27         -- سرعة التجميع (قابلة للتعديل من الواجهة)
+local FLY_STEP_SPEED = 27    -- ستود/ثانية
+local HOVER_HEIGHT = 2       -- فوق الكوين
+local TELEPORT_THRESHOLD = 100  -- لو أبعد من 100 → تيليبورت أول مرة
 
--- ========== States ==========
+-- ═══════════════════════════════════════════════
+-- STATES
+-- ═══════════════════════════════════════════════
 local farmActive = false
 local flingActive = false
 local antiAFKActive = true
 local pendingRespawn = false
 local lastResetTime = 0
 local ignoreCoins = {}
-local flyTarget = nil
-local lastFlyTime = 0
-local lastPosition = Vector3.zero
+local hasTeleportedToMap = false
+local lastResetRound = 0
 
--- ========== Anti-AFK ==========
+-- ═══════════════════════════════════════════════
+-- ANTI-AFK
+-- ═══════════════════════════════════════════════
 task.spawn(function()
     while true do
         if antiAFKActive then
@@ -41,28 +49,52 @@ task.spawn(function()
     end
 end)
 
--- ========== Murderer Detection ==========
+-- ═══════════════════════════════════════════════
+-- SYSTEM 3: FLING (COMPREHENSIVE DETECT)
+-- ═══════════════════════════════════════════════
 local function getMurderer()
+    -- METHOD 1: Check every player's character for a Knife tool
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
         local char = player.Character
         if char then
-            for _, item in ipairs(char:GetDescendants()) do
-                if item:IsA("Tool") and item.Name == "Knife" then return player end
+            -- Direct children
+            for _, child in ipairs(char:GetChildren()) do
+                if child:IsA("Tool") then
+                    if child.Name:lower():find("knife") then
+                        return player
+                    end
+                end
+            end
+            -- All descendants (some games put knife in a folder)
+            for _, child in ipairs(char:GetDescendants()) do
+                if child:IsA("Tool") then
+                    if child.Name:lower():find("knife") then
+                        return player
+                    end
+                end
             end
         end
     end
+
+    -- METHOD 2: Backpack
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
         local bp = player:FindFirstChild("Backpack")
         if bp then
-            for _, item in ipairs(bp:GetDescendants()) do
-                if item:IsA("Tool") and item.Name == "Knife" then return player end
+            for _, child in ipairs(bp:GetDescendants()) do
+                if child:IsA("Tool") then
+                    if child.Name:lower():find("knife") then
+                        return player
+                    end
+                end
             end
         end
     end
+
+    -- METHOD 3: All Knife tools in workspace
     for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("Tool") and obj.Name == "Knife" then
+        if obj:IsA("Tool") and obj.Name:lower():find("knife") then
             local parent = obj.Parent
             if parent then
                 local plr = Players:GetPlayerFromCharacter(parent)
@@ -70,15 +102,39 @@ local function getMurderer()
             end
         end
     end
+
+    -- METHOD 4: Attributes (Role, role, GameRole, Team)
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
-        local role = player:GetAttribute("Role") or player:GetAttribute("role")
-        if role and tostring(role):lower():find("murder") then return player end
+        local role = player:GetAttribute("Role")
+                     or player:GetAttribute("role")
+                     or player:GetAttribute("GameRole")
+                     or player:GetAttribute("Team")
+        if role then
+            local r = tostring(role):lower()
+            if r:find("murder") or r == "killer" or r == "murderer" then
+                return player
+            end
+        end
     end
+
+    -- METHOD 5: Team color (red team = murderer in some MM2 versions)
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        if player.Team then
+            local teamName = player.Team.Name:lower()
+            if teamName:find("murder") or teamName:find("killer") then
+                return player
+            end
+        end
+    end
+
     return nil
 end
 
--- ========== DIRECT CFrame FLING LOOP (0.05s - fast kill) ==========
+-- ═══════════════════════════════════════════════
+-- FLING LOOP (0.05s = 20 times/sec - MUST kill)
+-- ═══════════════════════════════════════════════
 task.spawn(function()
     while true do
         task.wait(0.05)
@@ -88,15 +144,20 @@ task.spawn(function()
                 local hrp = murderer.Character:FindFirstChild("HumanoidRootPart")
                 local hum = murderer.Character:FindFirstChildOfClass("Humanoid")
                 if hrp and hum and hum.Health > 0 then
-                    -- CFrame مباشر للسماء + Velocity عالية
+                    -- Direct CFrame to sky (bypass anti-cheat)
                     pcall(function()
                         hrp.CFrame = CFrame.new(
                             math.random(-100, 100),
-                            50000 + math.random(0, 10000),
+                            100000 + math.random(0, 50000),
                             math.random(-100, 100)
                         )
-                        hrp.Velocity = Vector3.new(0, 50000, 0)
-                        hrp.AssemblyLinearVelocity = Vector3.new(0, 50000, 0)
+                        hrp.Velocity = Vector3.new(
+                            math.random(-10000, 10000),
+                            100000,
+                            math.random(-10000, 10000)
+                        )
+                        hrp.AssemblyLinearVelocity = hrp.Velocity
+                        hum.PlatformStand = true
                     end)
                 end
             end
@@ -104,7 +165,140 @@ task.spawn(function()
     end
 end)
 
--- ========== GUI ==========
+-- ═══════════════════════════════════════════════
+-- HELPERS
+-- ═══════════════════════════════════════════════
+local function getHRP()
+    local char = LocalPlayer.Character
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function getAllCoins()
+    local coins = {}
+    for _, map in ipairs(workspace:GetChildren()) do
+        if map:FindFirstChild("CoinContainer") then
+            for _, coin in ipairs(map.CoinContainer:GetChildren()) do
+                if coin:IsA("BasePart") and coin:FindFirstChild("TouchInterest") then
+                    if ignoreCoins[coin] ~= true then
+                        table.insert(coins, coin)
+                    end
+                end
+            end
+        end
+    end
+    return coins
+end
+
+local function getNearestCoin()
+    local hrp = getHRP()
+    if not hrp then return nil, math.huge end
+    local closest, dist = nil, math.huge
+    for _, coin in ipairs(getAllCoins()) do
+        local d = (hrp.Position - coin.Position).Magnitude
+        if d < dist then closest, dist = coin, d end
+    end
+    return closest, dist
+end
+
+local function getCoinCount()
+    local mainGui = LocalPlayer.PlayerGui:FindFirstChild("MainGUI")
+    if not mainGui then return 0, 0 end
+    local gameGui = mainGui:FindFirstChild("Game")
+    if not gameGui then return 0, 0 end
+    local coinBags = gameGui:FindFirstChild("CoinBags")
+    if not coinBags then return 0, 0 end
+    for _, bag in ipairs(coinBags:GetDescendants()) do
+        if bag:IsA("TextLabel") and bag.Name == "Coins" then
+            local cur, mx = bag.Text:match("(%d+)/(%d+)")
+            if cur and mx then
+                return tonumber(cur), tonumber(mx)
+            end
+        end
+    end
+    return 0, 0
+end
+
+local function isInRound()
+    local mainGui = LocalPlayer.PlayerGui:FindFirstChild("MainGUI")
+    if not mainGui then return false end
+    local gameGui = mainGui:FindFirstChild("Game")
+    if not gameGui then return false end
+    local timer = gameGui:FindFirstChild("Timer")
+    local earnedXP = gameGui:FindFirstChild("EarnedXP")
+    return (timer and timer.Visible) or (earnedXP and earnedXP.Visible)
+end
+
+-- ═══════════════════════════════════════════════
+-- RESET
+-- ═══════════════════════════════════════════════
+local function doAutoRespawn()
+    if pendingRespawn then return end
+    if tick() - lastResetTime < 5 then return end
+    pendingRespawn = true
+    lastResetTime = tick()
+    print("[RESET] 50 coins reached")
+
+    local char = LocalPlayer.Character
+    if char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            hum.PlatformStand = false
+            hum.WalkSpeed = 16
+        end
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") then part.CanCollide = true end
+        end
+    end
+
+    -- Fling murderer first
+    if flingActive then
+        local m = getMurderer()
+        if m and m.Character then
+            local h = m.Character:FindFirstChildOfClass("Humanoid")
+            if h and h.Health > 0 then
+                local hrp = m.Character:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    for i = 1, 30 do
+                        pcall(function()
+                            hrp.CFrame = CFrame.new(0, 100000, 0)
+                        end)
+                        task.wait(0.03)
+                    end
+                end
+                task.wait(1)
+            end
+        end
+    end
+
+    if char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum and hum.Health > 0 then
+            pcall(function() hum.Health = 0 end)
+        end
+    end
+    task.wait(3)
+    pendingRespawn = false
+    ignoreCoins = {}
+    hasTeleportedToMap = false
+end
+
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        if farmActive and not pendingRespawn then
+            if isInRound() then
+                local cur, mx = getCoinCount()
+                if mx and mx >= 40 and cur >= mx then
+                    doAutoRespawn()
+                end
+            end
+        end
+    end
+end)
+
+-- ═══════════════════════════════════════════════
+-- GUI
+-- ═══════════════════════════════════════════════
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "AmoChereebMobile"
 ScreenGui.Parent = CoreGui
@@ -137,8 +331,8 @@ task.spawn(function()
 end)
 
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 340, 0, 320)
-MainFrame.Position = UDim2.new(0.5, -170, 0.5, -160)
+MainFrame.Size = UDim2.new(0, 340, 0, 380)
+MainFrame.Position = UDim2.new(0.5, -170, 0.5, -190)
 MainFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
@@ -273,9 +467,48 @@ local function makeToggle(yPos, text, icon, defaultState, callback)
     return btn
 end
 
-local FarmBtn = makeToggle(60, "طيران + جمع", "✈️", false, function(state)
+-- ═══════════════════════════════════════════════
+-- UI CONTROLS
+-- ═══════════════════════════════════════════════
+local SpeedLabel = Instance.new("TextLabel")
+SpeedLabel.Size = UDim2.new(0, 170, 0, 34)
+SpeedLabel.Position = UDim2.new(0, 12, 0, 56)
+SpeedLabel.BackgroundTransparency = 1
+SpeedLabel.Text = "⚡ سرعة التجميع"
+SpeedLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+SpeedLabel.Font = Enum.Font.GothamBold
+SpeedLabel.TextSize = 14
+SpeedLabel.TextXAlignment = Enum.TextXAlignment.Right
+SpeedLabel.Parent = MainFrame
+
+local SpeedBox = Instance.new("TextBox")
+SpeedBox.Size = UDim2.new(0, 80, 0, 34)
+SpeedBox.Position = UDim2.new(1, -100, 0, 56)
+SpeedBox.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
+SpeedBox.BorderSizePixel = 2
+SpeedBox.BorderColor3 = Color3.fromRGB(212, 175, 55)
+SpeedBox.Text = tostring(walkSpeed)
+SpeedBox.TextColor3 = Color3.fromRGB(212, 175, 55)
+SpeedBox.Font = Enum.Font.GothamBold
+SpeedBox.TextSize = 16
+SpeedBox.Parent = MainFrame
+Instance.new("UICorner", SpeedBox).CornerRadius = UDim.new(0, 10)
+
+SpeedBox.FocusLost:Connect(function()
+    local n = tonumber(SpeedBox.Text)
+    if n and n >= 16 and n <= 100 then
+        walkSpeed = n
+        FLY_STEP_SPEED = n
+    else
+        SpeedBox.Text = tostring(walkSpeed)
+    end
+end)
+
+local FarmBtn = makeToggle(100, "طيران + جمع", "✈️", false, function(state)
     farmActive = state
-    if not state then
+    if state then
+        hasTeleportedToMap = false
+    else
         local char = LocalPlayer.Character
         if char then
             local hum = char:FindFirstChildOfClass("Humanoid")
@@ -291,17 +524,17 @@ local FarmBtn = makeToggle(60, "طيران + جمع", "✈️", false, function(
     end
 end)
 
-local FlingBtn = makeToggle(130, "فلنك القاتل", "💥", false, function(state)
+local FlingBtn = makeToggle(170, "فلنك القاتل", "💥", false, function(state)
     flingActive = state
 end)
 
-local AFKBtn = makeToggle(200, "مكافحة الطرد", "⏳", true, function(state)
+local AFKBtn = makeToggle(240, "مكافحة الطرد", "⏳", true, function(state)
     antiAFKActive = state
 end)
 
 local CoinPanel = Instance.new("Frame")
 CoinPanel.Size = UDim2.new(1, -24, 0, 44)
-CoinPanel.Position = UDim2.new(0, 12, 0, 268)
+CoinPanel.Position = UDim2.new(0, 12, 0, 320)
 CoinPanel.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
 CoinPanel.BorderSizePixel = 2
 CoinPanel.BorderColor3 = Color3.fromRGB(212, 175, 55)
@@ -350,128 +583,9 @@ FloatBtn.InputEnded:Connect(function(input)
     end
 end)
 
--- ========== Helpers ==========
-local function getHRP()
-    local char = LocalPlayer.Character
-    return char and char:FindFirstChild("HumanoidRootPart")
-end
-
-local function getAllCoins()
-    local coins = {}
-    for _, map in ipairs(workspace:GetChildren()) do
-        if map:FindFirstChild("CoinContainer") then
-            for _, coin in ipairs(map.CoinContainer:GetChildren()) do
-                if coin:IsA("BasePart") and coin:FindFirstChild("TouchInterest") then
-                    if ignoreCoins[coin] ~= true then
-                        table.insert(coins, coin)
-                    end
-                end
-            end
-        end
-    end
-    return coins
-end
-
-local function getNearestCoin()
-    local hrp = getHRP()
-    if not hrp then return nil, math.huge end
-    local closest, dist = nil, math.huge
-    for _, coin in ipairs(getAllCoins()) do
-        local d = (hrp.Position - coin.Position).Magnitude
-        if d < dist then closest, dist = coin, d end
-    end
-    return closest, dist
-end
-
-local function getCoinCount()
-    local mainGui = LocalPlayer.PlayerGui:FindFirstChild("MainGUI")
-    if not mainGui then return 0, 0 end
-    local gameGui = mainGui:FindFirstChild("Game")
-    if not gameGui then return 0, 0 end
-    local coinBags = gameGui:FindFirstChild("CoinBags")
-    if not coinBags then return 0, 0 end
-    for _, bag in ipairs(coinBags:GetDescendants()) do
-        if bag:IsA("TextLabel") and bag.Name == "Coins" then
-            local cur, mx = bag.Text:match("(%d+)/(%d+)")
-            if cur and mx then
-                return tonumber(cur), tonumber(mx)
-            end
-        end
-    end
-    return 0, 0
-end
-
-local function isInRound()
-    local mainGui = LocalPlayer.PlayerGui:FindFirstChild("MainGUI")
-    if not mainGui then return false end
-    local gameGui = mainGui:FindFirstChild("Game")
-    if not gameGui then return false end
-    local timer = gameGui:FindFirstChild("Timer")
-    local earnedXP = gameGui:FindFirstChild("EarnedXP")
-    return (timer and timer.Visible) or (earnedXP and earnedXP.Visible)
-end
-
--- ========== Reset ==========
-local function doAutoRespawn()
-    if pendingRespawn then return end
-    if tick() - lastResetTime < 5 then return end
-    pendingRespawn = true
-    lastResetTime = tick()
-    print("[RESET] at 50 coins")
-
-    local char = LocalPlayer.Character
-    if char then
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum then
-            hum.PlatformStand = false
-            hum.WalkSpeed = 16
-        end
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then part.CanCollide = true end
-        end
-    end
-
-    if flingActive then
-        local m = getMurderer()
-        if m and m.Character then
-            local h = m.Character:FindFirstChildOfClass("Humanoid")
-            if h and h.Health > 0 then
-                local hrp = m.Character:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    hrp.CFrame = CFrame.new(0, 50000, 0)
-                end
-                task.wait(1)
-            end
-        end
-    end
-
-    if char then
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum and hum.Health > 0 then
-            pcall(function() hum.Health = 0 end)
-        end
-    end
-    task.wait(3)
-    pendingRespawn = false
-    ignoreCoins = {}
-end
-
--- Reset verification loop
-task.spawn(function()
-    while true do
-        task.wait(0.5)
-        if farmActive and not pendingRespawn then
-            if isInRound() then
-                local cur, mx = getCoinCount()
-                if mx and mx >= 40 and cur >= mx then
-                    doAutoRespawn()
-                end
-            end
-        end
-    end
-end)
-
--- ========== FORCE FLY (RunService.Stepped - before physics) ==========
+-- ═══════════════════════════════════════════════
+-- SYSTEM 1+2: FLY + COINS (Stepped = before physics)
+-- ═══════════════════════════════════════════════
 RunService.Stepped:Connect(function()
     pcall(function()
         if not farmActive or pendingRespawn then return end
@@ -481,37 +595,53 @@ RunService.Stepped:Connect(function()
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         if not hrp or not hum or hum.Health <= 0 then return end
 
-        -- 🚀 FORCE FLY MODE
+        -- Force fly state
         hum.PlatformStand = true
         hum.WalkSpeed = 0
         hum.JumpPower = 0
         hum.AutoRotate = false
 
-        -- 🚫 Noclip على كل الأجزاء
+        -- Noclip all parts
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") and part.CanCollide then
                 part.CanCollide = false
             end
         end
 
-        -- 🎯 البحث عن كوين
-        local coin = getNearestCoin()
+        -- Find coin
+        local coin, dist = getNearestCoin()
         if not coin then return end
 
-        local dist = (hrp.Position - coin.Position).Magnitude
-        local targetPos = coin.Position + Vector3.new(0, HOVER_HEIGHT, 0)
+        -- ═══ TELEPORT FIRST (map entry - once) ═══
+        if not hasTeleportedToMap and dist > TELEPORT_THRESHOLD then
+            hrp.CFrame = CFrame.new(coin.Position + Vector3.new(0, HOVER_HEIGHT, 0))
+            hrp.Velocity = Vector3.zero
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hasTeleportedToMap = true
+            return
+        end
 
-        -- ✈️ إجبار CFrame مباشرة (كل فريم)
-        if dist > 2 then
-            local delta = targetPos - hrp.Position
-            local step = math.min(FLY_SPEED / 60, delta.Magnitude)
-            if step > 0 then
-                local newPos = hrp.Position + delta.Unit * step
-                hrp.CFrame = CFrame.new(newPos)
-            end
+        -- ═══ FLY TO COIN (safe step) ═══
+        local targetPos = coin.Position + Vector3.new(0, HOVER_HEIGHT, 0)
+        local delta = targetPos - hrp.Position
+        local flyDist = delta.Magnitude
+
+        if flyDist > 2 then
+            local step = math.min(FLY_STEP_SPEED / 60, flyDist)
+            local newPos = hrp.Position + delta.Unit * step
+            hrp.CFrame = CFrame.new(newPos, targetPos)
         else
-            -- جمع
+            -- On coin
             hrp.CFrame = CFrame.new(targetPos)
+        end
+
+        -- Zero velocity (no fall)
+        hrp.Velocity = Vector3.zero
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.RotVelocity = Vector3.zero
+
+        -- ═══ COLLECT (touch from all parts) ═══
+        if dist < 6 then
             for _, part in ipairs(char:GetDescendants()) do
                 if part:IsA("BasePart") then
                     pcall(function()
@@ -520,12 +650,14 @@ RunService.Stepped:Connect(function()
                     end)
                 end
             end
-        end
 
-        -- إجبار Velocity = 0 (مافي سقوط)
-        hrp.Velocity = Vector3.zero
-        hrp.AssemblyLinearVelocity = Vector3.zero
-        hrp.RotVelocity = Vector3.zero
+            -- Track stuck coin
+            if not ignoreCoins[coin] then
+                ignoreCoins[coin] = tick()
+            elseif type(ignoreCoins[coin]) == "number" and tick() - ignoreCoins[coin] > 1.5 then
+                ignoreCoins[coin] = true
+            end
+        end
     end)
 end)
 
@@ -543,6 +675,7 @@ end)
 -- Respawn
 LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(0.5)
+    hasTeleportedToMap = false
     if not farmActive then
         local hum = char:FindFirstChildOfClass("Humanoid")
         if hum then hum.WalkSpeed = 16 end
