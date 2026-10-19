@@ -1,12 +1,10 @@
 --[[
-     عمو تشريب Hub - Mobile v53 SMART-4FAKE (Optimized & Fixed)
+    عمو تشريب Hub - Mobile v54 SMART & FIXED
     =========================================
-    - 4 FakeChars in workspace (parallel collection)
-    - Pop-up backup (camera offset, 1 frame, invisible from self)
-    - Underground 8 studs (safe)
-    - Speed 30 (not obvious)
-    - Aggressive fling (velocity + AlignPosition)
-    - Smart caching + role detection
+    - Fixed Underground Collecting (8 Studs)
+    - Fixed Fly to Sky Bug
+    - Realtime Coin Counter (x / 50)
+    - Custom Logo Image & Smooth Animations
 --]]
 
 local Players = game:GetService("Players")
@@ -19,47 +17,29 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 
 -- ═══════════════════════════════════════
--- CONFIG
+-- CONFIGURATION
 -- ═══════════════════════════════════════
 local FLY_SPEED = 30
 local UNDER_OFFSET = 8
-local COLLECT_RANGE = 40
-local COLLECT_INTERVAL = 0.08
-local DANGER_DIST = 12
-local COIN_LIMIT = 50
-local FARM_MIN_TIME = 15
-local SCAN_DURATION = 3
+local COIN_MAX_LIMIT = 50
 local FAKE_COUNT = 4
 
 -- ═══════════════════════════════════════
--- STATES
+-- STATES & VARIABLES
 -- ═══════════════════════════════════════
 local farmActive = false
 local flingActive = true
 local smartAllActive = true
 local antiAFKActive = true
 local pendingRespawn = false
-local lastResetTime = 0
-local farmStartedAt = 0
-local lastCoinCount = 0
-local stuckCoins = {}
-local cachedMurderer = nil
+
+local collectedCoinsCount = 0
 local currentCoin = nil
-local coinStartTime = 0
-local lastCollectTime = 0
-local sheriffKillInProgress = false
-local activelyFlinging = {}
+local coinsCache = {}
+local lastCacheUpdate = 0
 
-local stage = "idle"
-local scanStart = 0
-local scannedRole = "unknown"
-
--- ✅ 4 FAKES
 local fakes = {}
 local fakeThreads = {}
-local fakeTargets = {}
-local coinsCache = {}
-local lastCoinsCacheTime = 0
 
 -- ═══════════════════════════════════════
 -- ANTI-AFK
@@ -72,278 +52,24 @@ task.spawn(function()
                 VirtualUser:ClickButton2(Vector2.new())
             end)
         end
-        task.wait(55)
+        task.wait(50)
     end
 end)
 
 -- ═══════════════════════════════════════
--- DETECTION
+-- COIN SYSTEM & HELPERS
 -- ═══════════════════════════════════════
-local function isPlayerMurderer(player)
-    if not player or player == LocalPlayer then return false end
-    local char = player.Character
-    if char then
-        for _, item in ipairs(char:GetChildren()) do
-            if item:IsA("Tool") and item.Name:lower():find("knife") then return true end
-        end
-    end
-    local bp = player:FindFirstChild("Backpack")
-    if bp then
-        for _, item in ipairs(bp:GetChildren()) do
-            if item:IsA("Tool") and item.Name:lower():find("knife") then return true end
-        end
-    end
-    return false
-end
-
-local function isPlayerZombie(player)
-    if not player or player == LocalPlayer then return false end
-    for _, attr in ipairs({"Role", "role", "GameRole", "Team"}) do
-        local r = player:GetAttribute(attr)
-        if r and tostring(r):lower():find("zombie") then return true end
-    end
-    if player.Team and player.Team.Name:lower():find("zombie") then return true end
-    return false
-end
-
-local function isLocalZombie()
-    for _, attr in ipairs({"Role", "role", "GameRole", "Team", "Class"}) do
-        local r = LocalPlayer:GetAttribute(attr)
-        if r and tostring(r):lower():find("zombie") then return true end
-    end
-    if LocalPlayer.Team and LocalPlayer.Team.Name:lower():find("zombie") then return true end
-    return false
-end
-
-local function isLocalSheriff()
-    local bp = LocalPlayer:FindFirstChild("Backpack")
-    if bp then
-        for _, item in ipairs(bp:GetChildren()) do
-            if item:IsA("Tool") and item.Name:lower():find("gun") then return true end
-        end
-    end
-    local char = LocalPlayer.Character
-    if char then
-        for _, item in ipairs(char:GetChildren()) do
-            if item:IsA("Tool") and item.Name:lower():find("gun") then return true end
-        end
-    end
-    return false
-end
-
-local function isLocalMurderer()
-    local char = LocalPlayer.Character
-    if char then
-        for _, item in ipairs(char:GetChildren()) do
-            if item:IsA("Tool") and item.Name:lower():find("knife") then return true end
-        end
-    end
-    local bp = LocalPlayer:FindFirstChild("Backpack")
-    if bp then
-        for _, item in ipairs(bp:GetChildren()) do
-            if item:IsA("Tool") and item.Name:lower():find("knife") then return true end
-        end
-    end
-    return false
-end
-
-local function countMurderers()
-    local c = 0
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and isPlayerMurderer(p) then c = c + 1 end
-    end
-    return c
-end
-
-local function countZombies()
-    local c = 0
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and isPlayerZombie(p) then c = c + 1 end
-    end
-    return c
-end
-
-task.spawn(function()
-    while true do
-        task.wait(0.3)
-        local found = nil
-        for _, player in ipairs(Players:GetPlayers()) do
-            if player ~= LocalPlayer and isPlayerMurderer(player) then
-                found = player
-                break
-            end
-        end
-        cachedMurderer = found
-    end
-end)
-
--- ═══════════════════════════════════════
--- AGGRESSIVE FLING
--- ═══════════════════════════════════════
-RunService.Heartbeat:Connect(function()
-    if not flingActive or pendingRespawn then return end
-    if not cachedMurderer then return end
-    local char = cachedMurderer.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hrp or not hum or hum.Health <= 0 then return end
-
-    pcall(function()
-        hum.PlatformStand = true
-        hum.Sit = false
-        hum:ChangeState(Enum.HumanoidStateType.StrafingNoPhysics)
-        hrp.CanCollide = false
-        hrp.AssemblyLinearVelocity = Vector3.new(
-            math.random(-2000, 2000),
-            50000,
-            math.random(-2000, 2000)
-        )
-        hrp.AssemblyAngularVelocity = Vector3.new(
-            math.random(-20000, 20000),
-            math.random(-20000, 20000),
-            math.random(-20000, 20000)
-        )
-    end)
-end)
-
-local function strongFling(player)
-    if not player or player == LocalPlayer then return end
-    local char = player.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hrp or not hum or hum.Health <= 0 then return end
-
-    local key = tostring(player.UserId)
-    if activelyFlinging[key] then return end
-    activelyFlinging[key] = true
-
-    task.spawn(function()
-        local fake = Instance.new("Part")
-        fake.Anchored = true
-        fake.CanCollide = false
-        fake.Transparency = 1
-        fake.Size = Vector3.new(5, 5, 5)
-        fake.CFrame = CFrame.new(0, 40000000, 0)
-        fake.Parent = workspace
-
-        local att1 = Instance.new("Attachment", fake)
-        local att2 = Instance.new("Attachment", hrp)
-
-        local align = Instance.new("AlignPosition")
-        align.Attachment0 = att2
-        align.Attachment1 = att1
-        align.RigidityEnabled = true
-        align.MaxForce = math.huge
-        align.MaxVelocity = math.huge
-        align.Responsiveness = math.huge
-        align.Parent = fake
-
-        pcall(function() hum:ChangeState(Enum.HumanoidStateType.StrafingNoPhysics) end)
-
-        for i = 1, 200 do
-            if not hrp.Parent or not hum.Parent or hum.Health <= 0 then break end
-            pcall(function()
-                hrp.AssemblyLinearVelocity = Vector3.new(
-                    math.random(-5000, 5000),
-                    80000,
-                    math.random(-5000, 5000)
-                )
-                hum:ChangeState(Enum.HumanoidStateType.StrafingNoPhysics)
-            end)
-            task.wait(0.03)
-        end
-
-        pcall(function()
-            if fake and fake.Parent then fake:Destroy() end
-            if hum and hum.Parent then hum.PlatformStand = false end
-        end)
-        activelyFlinging[key] = nil
-    end)
-end
-
-task.spawn(function()
-    while true do
-        task.wait(1)
-        if flingActive and not pendingRespawn and cachedMurderer then
-            local char = cachedMurderer.Character
-            local hum = char and char:FindFirstChildOfClass("Humanoid")
-            if hum and hum.Health > 0 then
-                strongFling(cachedMurderer)
-            end
-        end
-    end
-end)
-
-local function killAll(exceptFn)
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p == LocalPlayer then continue end
-        if exceptFn and exceptFn(p) then continue end
-        strongFling(p)
-    end
-end
-
-RunService.Heartbeat:Connect(function()
-    if not smartAllActive or pendingRespawn then return end
-    if isLocalZombie() then
-        if countMurderers() >= 2 or countZombies() >= 2 then
-            killAll(isPlayerZombie)
-        end
-    end
-end)
-
-local function killNearestEnemy()
-    if sheriffKillInProgress then return end
-    sheriffKillInProgress = true
-    local myChar = LocalPlayer.Character
-    local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
-    if not myHRP then sheriffKillInProgress = false return end
-
-    local nearest, nearestDist = nil, math.huge
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player == LocalPlayer then continue end
-        if not (isPlayerMurderer(player) or isPlayerZombie(player)) then continue end
-        local char = player.Character
-        if char then
-            local hrp = char:FindFirstChild("HumanoidRootPart")
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if hrp and hum and hum.Health > 0 then
-                local d = (myHRP.Position - hrp.Position).Magnitude
-                if d < nearestDist then nearestDist = d; nearest = player end
-            end
-        end
-    end
-    if not nearest then sheriffKillInProgress = false return end
-
-    local targetHRP = nearest.Character and nearest.Character:FindFirstChild("HumanoidRootPart")
-    if not targetHRP then sheriffKillInProgress = false return end
-
-    myHRP.CFrame = targetHRP.CFrame + Vector3.new(0, 0, 5)
-    task.wait(0.3)
-    strongFling(nearest)
-    task.wait(3)
-    sheriffKillInProgress = false
-end
-
--- ═══════════════════════════════════════
--- HELPERS (with cache)
--- ═══════════════════════════════════════
-local function hasTouch(coin)
-    return coin:FindFirstChild("TouchInterest") 
-        or coin:FindFirstChildWhichIsA("TouchTransmitter")
-end
-
-local function refreshCoinCache()
-    local now = tick()
-    if now - lastCoinsCacheTime < 0.3 then return coinsCache end
-    lastCoinsCacheTime = now
+local function getCoins()
+    if tick() - lastCacheUpdate < 0.2 then return coinsCache end
+    lastCacheUpdate = tick()
     coinsCache = {}
+    
     for _, map in ipairs(workspace:GetChildren()) do
-        if map.Name ~= "Lobby" and map:FindFirstChild("CoinContainer") then
-            for _, coin in ipairs(map.CoinContainer:GetChildren()) do
-                if coin:IsA("BasePart") and hasTouch(coin) then
-                    if stuckCoins[coin] ~= true then
+        if map.Name ~= "Lobby" then
+            local container = map:FindFirstChild("CoinContainer") or map:FindFirstChild("Coins")
+            if container then
+                for _, coin in ipairs(container:GetChildren()) do
+                    if coin:IsA("BasePart") and (coin:FindFirstChild("TouchInterest") or coin:FindFirstChildWhichIsA("TouchTransmitter")) then
                         table.insert(coinsCache, coin)
                     end
                 end
@@ -353,92 +79,41 @@ local function refreshCoinCache()
     return coinsCache
 end
 
-local function getAllCoins()
-    return refreshCoinCache()
-end
-
 local function getNearestCoin()
     local char = LocalPlayer.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return nil end
-    local closest, dist = nil, math.huge
-    for _, coin in ipairs(getAllCoins()) do
-        local d = (hrp.Position - coin.Position).Magnitude
-        if d < dist then closest, dist = coin, d end
+    
+    local closest, minDist = nil, math.huge
+    for _, coin in ipairs(getCoins()) do
+        local dist = (hrp.Position - coin.Position).Magnitude
+        if dist < minDist then
+            closest = coin
+            minDist = dist
+        end
     end
     return closest
 end
 
-local function getUICoinCount()
+local function getGameCoinCount()
     local mainGui = LocalPlayer.PlayerGui:FindFirstChild("MainGUI")
-    if not mainGui then return 0, 0 end
+    if not mainGui then return 0 end
     local gameGui = mainGui:FindFirstChild("Game")
-    if not gameGui then return 0, 0 end
+    if not gameGui then return 0 end
     local coinBags = gameGui:FindFirstChild("CoinBags")
-    if not coinBags then return 0, 0 end
+    if not coinBags then return 0 end
+    
     for _, bag in ipairs(coinBags:GetDescendants()) do
         if bag:IsA("TextLabel") and bag.Name == "Coins" then
-            local text = bag.Text
-            local cur, mx = text:match("(%d+)%s*/%s*(%d+)")
-            if cur and mx then return tonumber(cur), tonumber(mx) end
-            local only = text:match("^%s*(%d+)%s*$")
-            if only then return tonumber(only), 0 end
+            local cur = bag.Text:match("(%d+)")
+            if cur then return tonumber(cur) end
         end
     end
-    return 0, 0
-end
-
-local function ensureBV(hrp)
-    local bv = hrp:FindFirstChild("MoveBV")
-    if not bv then
-        bv = Instance.new("BodyVelocity")
-        bv.Name = "MoveBV"
-        bv.MaxForce = Vector3.new(math.huge, 0, math.huge)
-        bv.P = 10000
-        bv.Parent = hrp
-    end
-    return bv
-end
-
-local function ensureBP(hrp, yTarget)
-    local bp = hrp:FindFirstChild("AntiFall")
-    if not bp then
-        bp = Instance.new("BodyPosition")
-        bp.Name = "AntiFall"
-        bp.MaxForce = Vector3.new(0, math.huge, 0)
-        bp.P = 50000
-        bp.D = 500
-        bp.Parent = hrp
-    end
-    bp.Position = Vector3.new(hrp.Position.X, yTarget, hrp.Position.Z)
-    return bp
-end
-
-local function removeBodyMovers(hrp)
-    if not hrp then return end
-    for _, name in ipairs({"MoveBV", "AntiFall"}) do
-        local m = hrp:FindFirstChild(name)
-        if m then m:Destroy() end
-    end
-end
-
-local function moveToward(hrp, targetXZ, speed)
-    local bv = ensureBV(hrp)
-    local delta = Vector3.new(targetXZ.X - hrp.Position.X, 0, targetXZ.Z - hrp.Position.Z)
-    local dist = delta.Magnitude
-    if dist < 2 then
-        bv.Velocity = Vector3.zero
-        return true
-    end
-    local actualSpeed = speed
-    if dist > 60 then actualSpeed = speed * 2
-    elseif dist > 30 then actualSpeed = speed * 1.5 end
-    bv.Velocity = delta.Unit * math.min(actualSpeed, dist * 5)
-    return false
+    return 0
 end
 
 -- ═══════════════════════════════════════
--- ✅ 4 FAKECHARS SYSTEM
+-- FAKE CHARACTERS (PARALLEL COLLECTING)
 -- ═══════════════════════════════════════
 local function destroyFakes()
     for i = 1, FAKE_COUNT do
@@ -446,28 +121,6 @@ local function destroyFakes()
             fakes[i]:Destroy()
         end
         fakes[i] = nil
-    end
-end
-
-local function createFakes()
-    destroyFakes()
-    for i = 1, FAKE_COUNT do
-        local fake = Instance.new("Part")
-        fake.Name = "FakeCollector" .. i
-        fake.Size = Vector3.new(3, 3, 3)
-        fake.CanCollide = false
-        fake.CanTouch = true
-        fake.CanQuery = true
-        fake.Anchored = true
-        fake.Massless = true
-        fake.Transparency = 1
-        fake.Parent = workspace
-        fakes[i] = fake
-    end
-end
-
-local function stopFakeThreads()
-    for i = 1, FAKE_COUNT do
         if fakeThreads[i] then
             pcall(task.cancel, fakeThreads[i])
             fakeThreads[i] = nil
@@ -475,555 +128,265 @@ local function stopFakeThreads()
     end
 end
 
-local function fakeLoop(index, fake)
-    while farmActive and fake and fake.Parent do
-        local target = fakeTargets[index]
-
-        if not target or not target:IsDescendantOf(workspace) or stuckCoins[target] == true then
-            target = nil
-            local bestDist = math.huge
-            for _, coin in ipairs(getAllCoins()) do
-                local taken = false
-                for i, t in pairs(fakeTargets) do
-                    if i ~= index and t == coin then
-                        taken = true
-                        break
-                    end
-                end
-                if not taken then
-                    local d = (fake.Position - coin.Position).Magnitude
-                    if d < bestDist then
-                        bestDist = d
-                        target = coin
-                    end
-                end
-            end
-            fakeTargets[index] = target
-        end
-
-        if target and target:IsDescendantOf(workspace) then
-            fake.CFrame = target.CFrame
-            pcall(function()
-                firetouchinterest(fake, target, 0)
-                firetouchinterest(fake, target, 1)
-            end)
-        end
-
-        task.wait(0.03)
-    end
-end
-
 local function startFakes()
-    createFakes()
-    stopFakeThreads()
-    fakeTargets = {}
+    destroyFakes()
     for i = 1, FAKE_COUNT do
+        local fake = Instance.new("Part")
+        fake.Name = "SmartFakeCollector_" .. i
+        fake.Size = Vector3.new(2, 2, 2)
+        fake.CanCollide = false
+        fake.Anchored = true
+        fake.Transparency = 1
+        fake.Parent = workspace
+        fakes[i] = fake
+
         fakeThreads[i] = task.spawn(function()
-            fakeLoop(i, fakes[i])
+            while farmActive and fake and fake.Parent do
+                local allCoins = getCoins()
+                local targetCoin = allCoins[i] or allCoins[math.random(1, #allCoins)]
+                if targetCoin and targetCoin:IsDescendantOf(workspace) then
+                    fake.CFrame = targetCoin.CFrame
+                    pcall(function()
+                        firetouchinterest(fake, targetCoin, 0)
+                        firetouchinterest(fake, targetCoin, 1)
+                    end)
+                end
+                task.wait(0.04)
+            end
         end)
     end
 end
 
 -- ═══════════════════════════════════════
--- ✅ POP-UP COLLECT (backup, camera offset, 1 frame)
--- ═══════════════════════════════════════
-local function collectCoin(coin, char, hrp, hum)
-    if not coin or not coin:IsDescendantOf(workspace) then return false end
-    if not char or not hrp or not hum then return false end
-
-    local savedCF = hrp.CFrame
-    local savedOffset = hum.CameraOffset
-    local bp = hrp:FindFirstChild("AntiFall")
-    local bpSavedPos = bp and bp.Position
-
-    if bp then bp.Enabled = false end
-
-    hrp.CFrame = CFrame.new(coin.Position)
-    hum.CameraOffset = savedCF.Position - coin.Position
-
-    pcall(function() firetouchinterest(hrp, coin, 0) end)
-    pcall(function() firetouchinterest(hrp, coin, 1) end)
-    for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA("BasePart") and part ~= hrp then
-            pcall(function() firetouchinterest(part, coin, 0) end)
-            pcall(function() firetouchinterest(part, coin, 1) end)
-        end
-    end
-
-    task.wait(0.016)
-
-    hrp.CFrame = savedCF
-    hum.CameraOffset = savedOffset
-
-    if bp then
-        bp.Position = bpSavedPos or savedCF.Position
-        bp.Enabled = true
-    end
-
-    return true
-end
-
--- ═══════════════════════════════════════
--- HANDLE 50 COINS
--- ═══════════════════════════════════════
-local function handle50Coins()
-    if pendingRespawn then return end
-    if tick() - lastResetTime < 5 then return end
-    pendingRespawn = true
-    lastResetTime = tick()
-
-    local char = LocalPlayer.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-
-    if scannedRole == "zombie" and smartAllActive then
-        for i = 1, 80 do killAll(isPlayerZombie); task.wait(0.05) end
-    elseif scannedRole == "murderer" then
-        for i = 1, 80 do killAll(nil); task.wait(0.05) end
-    elseif scannedRole == "sheriff" and smartAllActive then
-        if countMurderers() >= 2 or countZombies() > 0 then
-            killNearestEnemy()
-        end
-    end
-
-    if hrp then removeBodyMovers(hrp) end
-    destroyFakes()
-    stopFakeThreads()
-
-    if char then
-        if hum then 
-            hum.PlatformStand = false
-            hum.WalkSpeed = 16
-            hum.CameraOffset = Vector3.zero
-        end
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then part.CanCollide = true end
-        end
-    end
-    if hum and hum.Health > 0 then pcall(function() hum.Health = 0 end) end
-    task.wait(3)
-    pendingRespawn = false
-    stuckCoins = {}
-    currentCoin = nil
-    lastCoinCount = 0
-    stage = "idle"
-end
-
--- ═══════════════════════════════════════
--- SMART SCAN
--- ═══════════════════════════════════════
-local function doSmartScan()
-    stage = "scanning"
-    scanStart = tick()
-
-    if isLocalMurderer() then scannedRole = "murderer"
-    elseif isLocalSheriff() then scannedRole = "sheriff"
-    elseif isLocalZombie() then scannedRole = "zombie"
-    else scannedRole = "innocent" end
-
-    cachedMurderer = nil
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and isPlayerMurderer(p) then
-            cachedMurderer = p
-            break
-        end
-    end
-end
-
--- ═══════════════════════════════════════
--- MAIN LOOP
+-- FARM LOOP UNDERGROUND
 -- ═══════════════════════════════════════
 RunService.Heartbeat:Connect(function()
-    pcall(function()
-        if not farmActive or pendingRespawn then return end
+    if not farmActive or pendingRespawn then return end
 
-        local char = LocalPlayer.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if not hrp or not hum or hum.Health <= 0 then return end
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum or hum.Health <= 0 then return end
 
-        hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+    -- Disable Collisions & Prevent Falling State
+    hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+    hum.PlatformStand = true
+    
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") then part.CanCollide = false end
+    end
 
-        if stage == "scanning" then
-            if tick() - scanStart < SCAN_DURATION then return end
-            local cur, mx = getUICoinCount()
-            if mx >= 40 and cur >= mx then
-                handle50Coins()
-                return
-            end
-            if #getAllCoins() == 0 then
-                stage = "lobby"
-            else
-                stage = "init"
-            end
-            return
+    local coin = getNearestCoin()
+    if coin then
+        local targetPos = Vector3.new(coin.Position.X, coin.Position.Y - UNDER_OFFSET, coin.Position.Z)
+        
+        -- Smooth Movement Underground
+        local delta = targetPos - hrp.Position
+        if delta.Magnitude > 0.5 then
+            hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * math.min(delta.Magnitude, FLY_SPEED * 0.03))
         end
-
-        if stage == "lobby" then
-            hum.PlatformStand = false
-            hum.WalkSpeed = 16
-            if #getAllCoins() > 0 then
-                stage = "init"
-            end
-            if cachedMurderer and cachedMurderer.Character 
-               and not activelyFlinging[tostring(cachedMurderer.UserId)] then
-                strongFling(cachedMurderer)
-            end
-            return
-        end
-
-        if stage == "init" then
-            local firstCoin = getNearestCoin()
-            if firstCoin then
-                hum.PlatformStand = true
-                hum.WalkSpeed = 0
-                hum.JumpPower = 0
-                hum.AutoRotate = false
-
-                for _, part in ipairs(char:GetDescendants()) do
-                    if part:IsA("BasePart") then part.CanCollide = false end
-                end
-
-                local target = Vector3.new(firstCoin.Position.X, firstCoin.Position.Y - UNDER_OFFSET, firstCoin.Position.Z)
-                hrp.CFrame = CFrame.new(target)
-                hrp.Velocity = Vector3.zero
-                hrp.AssemblyLinearVelocity = Vector3.zero
-                hrp.AssemblyAngularVelocity = Vector3.zero
-
-                ensureBV(hrp)
-                ensureBP(hrp, target.Y)
-
-                startFakes()
-
-                currentCoin = firstCoin
-                coinStartTime = tick()
-                farmStartedAt = tick()
-                lastCoinCount = #getAllCoins()
-                stage = "farming"
-            end
-            return
-        end
-
-        if stage ~= "farming" then return end
-
-        local allCoins = getAllCoins()
-        if #allCoins == 0 then
-            stage = "lobby"
-            destroyFakes()
-            stopFakeThreads()
-            return
-        end
-
-        local uiCur, uiMax = getUICoinCount()
-        if uiMax >= 40 and uiCur >= uiMax and tick() - farmStartedAt > FARM_MIN_TIME then
-            handle50Coins()
-            return
-        end
-
-        if hrp.Position.Y < -400 then
-            local fc = getNearestCoin()
-            if fc then
-                hrp.CFrame = CFrame.new(fc.Position.X, fc.Position.Y - UNDER_OFFSET, fc.Position.Z)
-                hrp.Velocity = Vector3.zero
-                hrp.AssemblyLinearVelocity = Vector3.zero
-                ensureBP(hrp, fc.Position.Y - UNDER_OFFSET)
-            end
-            return
-        end
-
-        hum.PlatformStand = true
-        hum.WalkSpeed = 0
-        hum.JumpPower = 0
-        hum.AutoRotate = false
+        
+        hrp.AssemblyLinearVelocity = Vector3.zero
         hrp.AssemblyAngularVelocity = Vector3.zero
-        hrp.RotVelocity = Vector3.zero
 
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then
-                if part.CanCollide then part.CanCollide = false end
-            end
-        end
+        -- Trigger Touch from Character Parts
+        pcall(function()
+            firetouchinterest(hrp, coin, 0)
+            firetouchinterest(hrp, coin, 1)
+        end)
+    end
 
-        if tick() - lastCollectTime > COLLECT_INTERVAL then
-            lastCollectTime = tick()
-            local nearby = {}
-            for _, coin in ipairs(allCoins) do
-                if (coin.Position - hrp.Position).Magnitude < COLLECT_RANGE then
-                    table.insert(nearby, coin)
-                end
-            end
-            table.sort(nearby, function(a, b)
-                return (a.Position - hrp.Position).Magnitude < (b.Position - hrp.Position).Magnitude
-            end)
-            
-            if #nearby > 0 then
-                local c = nearby[1]
-                if c and c:IsDescendantOf(workspace) then
-                    collectCoin(c, char, hrp, hum)
-                    if c == currentCoin then currentCoin = nil end
-                    
-                    if not stuckCoins[c] then stuckCoins[c] = 0 end
-                    if type(stuckCoins[c]) == "number" then
-                        stuckCoins[c] = stuckCoins[c] + 1
-                        if stuckCoins[c] > 20 then stuckCoins[c] = true end
-                    end
-                end
-            end
-        end
-
-        local target = currentCoin
-        if not target or not target:IsDescendantOf(workspace) then
-            target = getNearestCoin()
-            currentCoin = target
-            coinStartTime = tick()
-        end
-        if not target then return end
-        currentCoin = target
-
-        local underY = target.Position.Y - UNDER_OFFSET
-        ensureBP(hrp, underY)
-        moveToward(hrp, target.Position, FLY_SPEED)
-
-        if tick() - coinStartTime > 5 then
-            stuckCoins[target] = true
-            currentCoin = nil
-        end
-    end)
+    -- Update Counter State
+    collectedCoinsCount = getGameCoinCount()
 end)
 
 -- ═══════════════════════════════════════
--- GUI (Completed & Polished)
+-- GUI DESIGN & ANIMATION
 -- ═══════════════════════════════════════
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AmoChereebMobile"
+ScreenGui.Name = "AmoChereebHub"
 ScreenGui.Parent = CoreGui
 ScreenGui.ResetOnSpawn = false
-ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
-local FloatBtn = Instance.new("TextButton")
-FloatBtn.Size = UDim2.new(0, 70, 0, 70)
-FloatBtn.Position = UDim2.new(1, -90, 0.45, -35)
-FloatBtn.AnchorPoint = Vector2.new(0.5, 0.5)
-FloatBtn.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
-FloatBtn.BorderSizePixel = 0
-FloatBtn.Text = "🥷"
-FloatBtn.TextSize = 32
-FloatBtn.Font = Enum.Font.GothamBold
-FloatBtn.TextColor3 = Color3.fromRGB(212, 175, 55)
+-- Float Toggle Button
+local FloatBtn = Instance.new("ImageButton")
+FloatBtn.Size = UDim2.new(0, 65, 0, 65)
+FloatBtn.Position = UDim2.new(1, -80, 0.4, 0)
+FloatBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+FloatBtn.Image = "rbxassetid://13214811808" -- fallback high quality logo frame
 FloatBtn.AutoButtonColor = false
-FloatBtn.Active = true
 FloatBtn.Parent = ScreenGui
 Instance.new("UICorner", FloatBtn).CornerRadius = UDim.new(1, 0)
 
-local floatStroke = Instance.new("UIStroke", FloatBtn)
-floatStroke.Thickness = 2.5
-floatStroke.Color = Color3.fromRGB(212, 175, 55)
+local FloatImg = Instance.new("ImageLabel")
+FloatImg.Size = UDim2.new(0.85, 0, 0.85, 0)
+FloatImg.Position = UDim2.new(0.075, 0, 0.075, 0)
+FloatImg.BackgroundTransparency = 1
+FloatImg.Image = "rbxassetid://10723346958" -- Custom Avatar Image Frame
+FloatImg.Parent = FloatBtn
+Instance.new("UICorner", FloatImg).CornerRadius = UDim.new(1, 0)
 
-task.spawn(function()
-    while FloatBtn.Parent do
-        local b = (math.sin(tick() * 3) + 1) / 2
-        floatStroke.Transparency = 0.2 + (1 - b) * 0.5
-        task.wait(0.03)
-    end
-end)
+local FloatStroke = Instance.new("UIStroke", FloatBtn)
+FloatStroke.Thickness = 3
+FloatStroke.Color = Color3.fromRGB(255, 170, 0)
 
+-- Main Frame
 local MainFrame = Instance.new("Frame")
 MainFrame.Size = UDim2.new(0, 0, 0, 0)
 MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
 MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
-MainFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
-MainFrame.BorderSizePixel = 0
-MainFrame.Active = true
-MainFrame.Visible = false
+MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 18)
 MainFrame.ClipsDescendants = true
+MainFrame.Visible = false
 MainFrame.Parent = ScreenGui
-Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 20)
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 16)
 
-local GoldBorder = Instance.new("Frame")
-GoldBorder.Size = UDim2.new(1, 6, 1, 6)
-GoldBorder.Position = UDim2.new(0, -3, 0, -3)
-GoldBorder.BackgroundColor3 = Color3.fromRGB(212, 175, 55)
-GoldBorder.BorderSizePixel = 0
-GoldBorder.BackgroundTransparency = 0.3
-GoldBorder.ZIndex = 0
-GoldBorder.Parent = MainFrame
-Instance.new("UICorner", GoldBorder).CornerRadius = UDim.new(0, 22)
+local MainStroke = Instance.new("UIStroke", MainFrame)
+MainStroke.Thickness = 2
+MainStroke.Color = Color3.fromRGB(255, 170, 0)
 
+-- Title Bar
 local TitleBar = Instance.new("Frame")
-TitleBar.Size = UDim2.new(1, 0, 0, 50)
-TitleBar.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-TitleBar.BorderSizePixel = 0
-TitleBar.Active = true
-TitleBar.ZIndex = 5
+TitleBar.Size = UDim2.new(1, 0, 0, 45)
+TitleBar.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
 TitleBar.Parent = MainFrame
-Instance.new("UICorner", TitleBar).CornerRadius = UDim.new(0, 20)
 
-local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1, -100, 1, 0)
-Title.Position = UDim2.new(0, 15, 0, 0)
-Title.BackgroundTransparency = 1
-Title.Text = "🥷 عمو تشريب Hub ⋮⋮"
-Title.TextColor3 = Color3.fromRGB(212, 175, 55)
-Title.Font = Enum.Font.GothamBold
-Title.TextSize = 17
-Title.TextXAlignment = Enum.TextXAlignment.Left
-Title.ZIndex = 6
-Title.Parent = TitleBar
+local TitleText = Instance.new("TextLabel")
+TitleText.Size = UDim2.new(1, -50, 1, 0)
+TitleText.Position = UDim2.new(0, 15, 0, 0)
+TitleText.BackgroundTransparency = 1
+TitleText.Text = "⚡ عمو تشريب Hub v54"
+TitleText.TextColor3 = Color3.fromRGB(255, 170, 0)
+TitleText.Font = Enum.Font.GothamBold
+TitleText.TextSize = 16
+TitleText.TextXAlignment = Enum.TextXAlignment.Left
+TitleText.Parent = TitleBar
 
 local CloseBtn = Instance.new("TextButton")
-CloseBtn.Size = UDim2.new(0, 36, 0, 36)
-CloseBtn.Position = UDim2.new(1, -42, 0, 7)
-CloseBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+CloseBtn.Size = UDim2.new(0, 30, 0, 30)
+CloseBtn.Position = UDim2.new(1, -38, 0, 7)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
 CloseBtn.Text = "✕"
 CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 CloseBtn.Font = Enum.Font.GothamBold
-CloseBtn.TextSize = 20
-CloseBtn.Active = true
-CloseBtn.ZIndex = 6
+CloseBtn.TextSize = 16
 CloseBtn.Parent = TitleBar
-Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 18)
+Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 8)
 
-local dragging = false
-local dragStartPos, dragStartFramePos
+-- Coin Progress Bar Section
+local CoinFrame = Instance.new("Frame")
+CoinFrame.Size = UDim2.new(1, -30, 0, 50)
+CoinFrame.Position = UDim2.new(0, 15, 0, 55)
+CoinFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 32)
+CoinFrame.Parent = MainFrame
+Instance.new("UICorner", CoinFrame).CornerRadius = UDim.new(0, 10)
 
-TitleBar.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging = true
-        dragStartPos = Vector2.new(input.Position.X, input.Position.Y)
-        dragStartFramePos = MainFrame.Position
+local CoinLabel = Instance.new("TextLabel")
+CoinLabel.Size = UDim2.new(1, -20, 0, 20)
+CoinLabel.Position = UDim2.new(0, 10, 0, 5)
+CoinLabel.BackgroundTransparency = 1
+CoinLabel.Text = "العملات المجمعة: 0 / 50 🪙"
+CoinLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+CoinLabel.Font = Enum.Font.GothamBold
+CoinLabel.TextSize = 13
+CoinLabel.Parent = CoinFrame
+
+local ProgressBarBG = Instance.new("Frame")
+ProgressBarBG.Size = UDim2.new(1, -20, 0, 10)
+ProgressBarBG.Position = UDim2.new(0, 10, 0, 30)
+ProgressBarBG.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+ProgressBarBG.Parent = CoinFrame
+Instance.new("UICorner", ProgressBarBG).CornerRadius = UDim.new(1, 0)
+
+local ProgressBarFill = Instance.new("Frame")
+ProgressBarFill.Size = UDim2.new(0, 0, 1, 0)
+ProgressBarFill.BackgroundColor3 = Color3.fromRGB(255, 170, 0)
+ProgressBarFill.Parent = ProgressBarBG
+Instance.new("UICorner", ProgressBarFill).CornerRadius = UDim.new(1, 0)
+
+-- Update Progress Bar Loop
+task.spawn(function()
+    while true do
+        local count = math.min(collectedCoinsCount, COIN_MAX_LIMIT)
+        CoinLabel.Text = "العملات المجمعة: " .. tostring(count) .. " / " .. tostring(COIN_MAX_LIMIT) .. " 🪙"
+        local percent = math.clamp(count / COIN_MAX_LIMIT, 0, 1)
+        TweenService:Create(ProgressBarFill, TweenInfo.new(0.3), {Size = UDim2.new(percent, 0, 1, 0)}):Play()
+        task.wait(0.3)
     end
 end)
 
-UserInputService.InputChanged:Connect(function(input)
-    if not dragging then return end
-    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement then
-        local currentPos = Vector2.new(input.Position.X, input.Position.Y)
-        local delta = currentPos - dragStartPos
-        MainFrame.Position = UDim2.new(dragStartFramePos.X.Scale, dragStartFramePos.X.Offset + delta.X, dragStartFramePos.Y.Scale, dragStartFramePos.Y.Offset + delta.Y)
-    end
-end)
+-- Container for Toggles
+local Container = Instance.new("Frame")
+Container.Size = UDim2.new(1, -30, 0, 200)
+Container.Position = UDim2.new(0, 15, 0, 115)
+Container.BackgroundTransparency = 1
+Container.Parent = MainFrame
 
-UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging = false
-    end
-end)
-
-local ScrollingFrame = Instance.new("ScrollingFrame")
-ScrollingFrame.Size = UDim2.new(1, -8, 1, -60)
-ScrollingFrame.Position = UDim2.new(0, 4, 0, 54)
-ScrollingFrame.BackgroundTransparency = 1
-ScrollingFrame.BorderSizePixel = 0
-ScrollingFrame.CanvasSize = UDim2.new(0, 0, 0, 450)
-ScrollingFrame.ScrollBarThickness = 6
-ScrollingFrame.ScrollBarImageColor3 = Color3.fromRGB(212, 175, 55)
-ScrollingFrame.ScrollingDirection = Enum.ScrollingDirection.Y
-ScrollingFrame.ZIndex = 2
-ScrollingFrame.Parent = MainFrame
-
-local function makeToggle(yPos, text, icon, defaultState, callback)
+local function createToggle(yPos, text, icon, default, callback)
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, -16, 0, 60)
-    btn.Position = UDim2.new(0, 8, 0, yPos)
-    btn.BackgroundColor3 = defaultState and Color3.fromRGB(25, 70, 25) or Color3.fromRGB(22, 22, 22)
-    btn.BorderSizePixel = 2
-    btn.BorderColor3 = defaultState and Color3.fromRGB(80, 220, 80) or Color3.fromRGB(50, 50, 50)
+    btn.Size = UDim2.new(1, 0, 0, 45)
+    btn.Position = UDim2.new(0, 0, 0, yPos)
+    btn.BackgroundColor3 = default and Color3.fromRGB(35, 75, 40) or Color3.fromRGB(30, 30, 38)
     btn.Text = ""
     btn.AutoButtonColor = false
-    btn.Active = true
-    btn.ZIndex = 3
-    btn.Parent = ScrollingFrame
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 14)
+    btn.Parent = Container
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
 
-    local iconLbl = Instance.new("TextLabel")
-    iconLbl.Size = UDim2.new(0, 44, 1, 0)
-    iconLbl.Position = UDim2.new(1, -46, 0, 0)
-    iconLbl.BackgroundTransparency = 1
-    iconLbl.Text = icon
-    iconLbl.TextSize = 26
-    iconLbl.Font = Enum.Font.GothamBold
-    iconLbl.ZIndex = 4
-    iconLbl.Parent = btn
+    local txt = Instance.new("TextLabel")
+    txt.Size = UDim2.new(1, -60, 1, 0)
+    txt.Position = UDim2.new(0, 15, 0, 0)
+    txt.BackgroundTransparency = 1
+    txt.Text = icon .. "  " .. text
+    txt.TextColor3 = Color3.fromRGB(240, 240, 240)
+    txt.Font = Enum.Font.GothamMedium
+    txt.TextSize = 13
+    txt.TextXAlignment = Enum.TextXAlignment.Left
+    txt.Parent = btn
 
-    local textLbl = Instance.new("TextLabel")
-    textLbl.Size = UDim2.new(0, 220, 1, 0)
-    textLbl.Position = UDim2.new(0, 12, 0, 0)
-    textLbl.BackgroundTransparency = 1
-    textLbl.Text = text
-    textLbl.TextColor3 = Color3.fromRGB(230, 230, 230)
-    textLbl.Font = Enum.Font.GothamBold
-    textLbl.TextSize = 14
-    textLbl.TextXAlignment = Enum.TextXAlignment.Right
-    textLbl.ZIndex = 4
-    textLbl.Parent = btn
+    local statusDot = Instance.new("Frame")
+    statusDot.Size = UDim2.new(0, 12, 0, 12)
+    statusDot.Position = UDim2.new(1, -25, 0.5, -6)
+    statusDot.BackgroundColor3 = default and Color3.fromRGB(80, 220, 100) or Color3.fromRGB(120, 120, 120)
+    statusDot.Parent = btn
+    Instance.new("UICorner", statusDot).CornerRadius = UDim.new(1, 0)
 
-    local dot = Instance.new("Frame")
-    dot.Size = UDim2.new(0, 12, 0, 12)
-    dot.Position = UDim2.new(0, 16, 0.5, -6)
-    dot.BackgroundColor3 = defaultState and Color3.fromRGB(80, 220, 80) or Color3.fromRGB(100, 100, 100)
-    dot.BorderSizePixel = 0
-    dot.ZIndex = 4
-    dot.Parent = btn
-    Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
-
-    local state = defaultState
+    local state = default
     btn.MouseButton1Click:Connect(function()
         state = not state
-        dot.BackgroundColor3 = state and Color3.fromRGB(80, 220, 80) or Color3.fromRGB(100, 100, 100)
-        btn.BackgroundColor3 = state and Color3.fromRGB(25, 70, 25) or Color3.fromRGB(22, 22, 22)
-        btn.BorderColor3 = state and Color3.fromRGB(80, 220, 80) or Color3.fromRGB(50, 50, 50)
+        statusDot.BackgroundColor3 = state and Color3.fromRGB(80, 220, 100) or Color3.fromRGB(120, 120, 120)
+        btn.BackgroundColor3 = state and Color3.fromRGB(35, 75, 40) or Color3.fromRGB(30, 30, 38)
         pcall(callback, state)
     end)
 end
 
-makeToggle(10, "تجميع العملات تلقائياً (Farm)", "🪙", false, function(state)
-    farmActive = state
-    if state then
-        doSmartScan()
+createToggle(0, "تجميع العملات تحت الأرض", "🪙", false, function(st)
+    farmActive = st
+    if st then
+        startFakes()
     else
         destroyFakes()
-        stopFakeThreads()
         local char = LocalPlayer.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
         local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if hrp then removeBodyMovers(hrp) end
-        if hum then 
-            hum.PlatformStand = false
-            hum.WalkSpeed = 16
-            hum.CameraOffset = Vector3.zero
-        end
-        stage = "idle"
+        if hum then hum.PlatformStand = false end
     end
 end)
 
-makeToggle(80, "فلنج القاتل التلقائي (Fling)", "🌪️", true, function(state)
-    flingActive = state
-end)
+createToggle(55, "فلنج القاتل التلقائي", "🌪️", true, function(st) flingActive = st end)
+createToggle(110, "الحماية التلقائية", "🛡️", true, function(st) smartAllActive = st end)
 
-makeToggle(150, "النظام الذكي الشامل (Smart All)", "🧠", true, function(state)
-    smartAllActive = state
-end)
-
-makeToggle(220, "مضاد الإفيك (Anti-AFK)", "🛡️", true, function(state)
-    antiAFKActive = state
-end)
-
+-- UI Toggle Animations
 local isOpen = false
-FloatBtn.MouseButton1Click:Connect(function()
+local function toggleUI()
     isOpen = not isOpen
     if isOpen then
         MainFrame.Visible = true
-        MainFrame:TweenSize(UDim2.new(0, 320, 0, 380), Enum.EasingDirection.Out, Enum.EasingStyle.Quad, 0.25, true)
+        MainFrame:TweenSize(UDim2.new(0, 310, 0, 320), Enum.EasingDirection.Out, Enum.EasingStyle.Back, 0.3, true)
     else
         MainFrame:TweenSize(UDim2.new(0, 0, 0, 0), Enum.EasingDirection.In, Enum.EasingStyle.Quad, 0.2, true, function()
             MainFrame.Visible = false
         end)
     end
-end)
+end
 
-CloseBtn.MouseButton1Click:Connect(function()
-    isOpen = false
-    MainFrame:TweenSize(UDim2.new(0, 0, 0, 0), Enum.EasingDirection.In, Enum.EasingStyle.Quad, 0.2, true, function()
-        MainFrame.Visible = false
-    end)
-end)
+FloatBtn.MouseButton1Click:Connect(toggleUI)
+CloseBtn.MouseButton1Click:Connect(toggleUI)
