@@ -1,11 +1,10 @@
 --[[
-    عمو تشريب Hub - Mobile v56 ULTIMATE FIXED & OPTIMIZED
+    عمو تشريب Hub - Mobile v57 ULTRA ROBUST & FIXED
     =====================================================
-    - 1 Single FakeChar (Zero Lag & Stable Collection)
-    - Safe Underground 8 Studs (No Death / No Fly Bug)
-    - Adjustable Farm Speed Slider/Variable
-    - Smart Role Actions (Zombie, Murderer, Sheriff)
-    - Coin Counter (Max 50) + Custom User Avatar Image
+    - Enhanced Error Handling (Pcall Protection)
+    - 1 Single FakeChar (Stable Collection)
+    - Safe Underground 8 Studs
+    - Adjustable Farm Speed & Custom UI
 --]]
 
 local Players = game:GetService("Players")
@@ -17,16 +16,11 @@ local CoreGui = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
 
--- ═══════════════════════════════════════
 -- CONFIGURATION
--- ═══════════════════════════════════════
-local FARM_SPEED = 26 -- يمكنك تغيير السرعة هنا بسهولة
+local FARM_SPEED = 26
 local UNDER_OFFSET = 8
 local COIN_MAX_LIMIT = 50
 
--- ═══════════════════════════════════════
--- STATES & VARIABLES
--- ═══════════════════════════════════════
 local farmActive = false
 local flingActive = true
 local smartRoleActive = true
@@ -39,9 +33,7 @@ local lastCacheUpdate = 0
 local singleFake = nil
 local fakeThread = nil
 
--- ═══════════════════════════════════════
 -- ANTI-AFK SYSTEM
--- ═══════════════════════════════════════
 task.spawn(function()
     while true do
         if antiAFKActive then
@@ -54,139 +46,28 @@ task.spawn(function()
     end
 end)
 
--- ═══════════════════════════════════════
--- ROLE DETECTION & UTILS
--- ═══════════════════════════════════════
-local function isPlayerMurderer(player)
-    if not player or player == LocalPlayer then return false end
-    local char = player.Character
-    if char then
-        for _, item in ipairs(char:GetChildren()) do
-            if item:IsA("Tool") and item.Name:lower():find("knife") then return true end
-        end
-    end
-    local bp = player:FindFirstChild("Backpack")
-    if bp then
-        for _, item in ipairs(bp:GetChildren()) do
-            if item:IsA("Tool") and item.Name:lower():find("knife") then return true end
-        end
-    end
-    return false
-end
-
-local function isPlayerZombie(player)
-    if not player or player == LocalPlayer then return false end
-    for _, attr in ipairs({"Role", "role", "GameRole", "Team"}) do
-        local r = player:GetAttribute(attr)
-        if r and tostring(r):lower():find("zombie") then return true end
-    end
-    if player.Team and player.Team.Name:lower():find("zombie") then return true end
-    return false
-end
-
-local function isLocalZombie()
-    for _, attr in ipairs({"Role", "role", "GameRole", "Team", "Class"}) do
-        local r = LocalPlayer:GetAttribute(attr)
-        if r and tostring(r):lower():find("zombie") then return true end
-    end
-    if LocalPlayer.Team and LocalPlayer.Team.Name:lower():find("zombie") then return true end
-    return false
-end
-
-local function isLocalMurderer()
-    local char = LocalPlayer.Character
-    if char then
-        for _, item in ipairs(char:GetChildren()) do
-            if item:IsA("Tool") and item.Name:lower():find("knife") then return true end
-        end
-    end
-    local bp = LocalPlayer:FindFirstChild("Backpack")
-    if bp then
-        for _, item in ipairs(bp:GetChildren()) do
-            if item:IsA("Tool") and item.Name:lower():find("knife") then return true end
-        end
-    end
-    return false
-end
-
-local function isLocalSheriff()
-    local char = LocalPlayer.Character
-    if char then
-        for _, item in ipairs(char:GetChildren()) do
-            if item:IsA("Tool") and item.Name:lower():find("gun") then return true end
-        end
-    end
-    local bp = LocalPlayer:FindFirstChild("Backpack")
-    if bp then
-        for _, item in ipairs(bp:GetChildren()) do
-            if item:IsA("Tool") and item.Name:lower():find("gun") then return true end
-        end
-    end
-    return false
-end
-
-local function countMurderers()
-    local count = 0
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and isPlayerMurderer(p) then count = count + 1 end
-    end
-    return count
-end
-
-local function countZombies()
-    local count = 0
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and isPlayerZombie(p) then count = count + 1 end
-    end
-    return count
-end
-
--- ═══════════════════════════════════════
--- FLING SYSTEM
--- ═══════════════════════════════════════
-local function strongFling(targetPlayer)
-    if not targetPlayer or targetPlayer == LocalPlayer then return end
-    local char = targetPlayer.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hrp or not hum or hum.Health <= 0 then return end
-
-    pcall(function()
-        hum.PlatformStand = true
-        hrp.AssemblyLinearVelocity = Vector3.new(math.random(-4000, 4000), 75000, math.random(-4000, 4000))
-        hrp.AssemblyAngularVelocity = Vector3.new(math.random(-20000, 20000), math.random(-20000, 20000), math.random(-20000, 20000))
-    end)
-end
-
-local function killAllEnemies()
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer then strongFling(p) end
-    end
-end
-
--- ═══════════════════════════════════════
--- COIN SYSTEM & CACHE
--- ═══════════════════════════════════════
+-- SAFE COIN FINDER WITH PCALL PROTECTION
 local function getCoins()
-    if tick() - lastCacheUpdate < 0.2 then return coinsCache end
+    if tick() - lastCacheUpdate < 0.3 then return coinsCache end
     lastCacheUpdate = tick()
     coinsCache = {}
     
-    for _, map in ipairs(workspace:GetChildren()) do
-        if map.Name ~= "Lobby" then
-            local container = map:FindFirstChild("CoinContainer") or map:FindFirstChild("Coins")
-            if container then
-                local children = container:GetChildren()
-                for i = 1, #children do
-                    local coin = children[i]
-                    if coin:IsA("BasePart") and (coin:FindFirstChild("TouchInterest") or coin:FindFirstChildWhichIsA("TouchTransmitter")) then
-                        table.insert(coinsCache, coin)
+    pcall(function()
+        for _, map in ipairs(workspace:GetChildren()) do
+            if map.Name ~= "Lobby" then
+                local container = map:FindFirstChild("CoinContainer") or map:FindFirstChild("Coins") or map:FindFirstChild("CoinFolder")
+                if container then
+                    local children = container:GetChildren()
+                    for i = 1, #children do
+                        local coin = children[i]
+                        if coin and coin:IsA("BasePart") then
+                            table.insert(coinsCache, coin)
+                        end
                     end
                 end
             end
         end
-    end
+    end)
     return coinsCache
 end
 
@@ -199,35 +80,38 @@ local function getNearestCoin()
     local allCoins = getCoins()
     for i = 1, #allCoins do
         local coin = allCoins[i]
-        local dist = (hrp.Position - coin.Position).Magnitude
-        if dist < minDist then
-            closest = coin
-            minDist = dist
+        if coin and coin.Parent then
+            local dist = (hrp.Position - coin.Position).Magnitude
+            if dist < minDist then
+                closest = coin
+                minDist = dist
+            end
         end
     end
     return closest
 end
 
 local function getGameCoinCount()
-    local mainGui = LocalPlayer.PlayerGui:FindFirstChild("MainGUI")
-    if not mainGui then return 0 end
-    local gameGui = mainGui:FindFirstChild("Game")
-    if not gameGui then return 0 end
-    local coinBags = gameGui:FindFirstChild("CoinBags")
-    if not coinBags then return 0 end
-    
-    for _, bag in ipairs(coinBags:GetDescendants()) do
-        if bag:IsA("TextLabel") and bag.Name == "Coins" then
-            local cur = bag.Text:match("(%d+)")
-            if cur then return tonumber(cur) end
+    local success, count = pcall(function()
+        local mainGui = LocalPlayer.PlayerGui:FindFirstChild("MainGUI")
+        if not mainGui then return 0 end
+        local gameGui = mainGui:FindFirstChild("Game")
+        if not gameGui then return 0 end
+        local coinBags = gameGui:FindFirstChild("CoinBags")
+        if not coinBags then return 0 end
+        
+        for _, bag in ipairs(coinBags:GetDescendants()) do
+            if bag:IsA("TextLabel") and bag.Name == "Coins" then
+                local cur = bag.Text:match("(%d+)")
+                if cur then return tonumber(cur) end
+            end
         end
-    end
-    return 0
+        return 0
+    end)
+    return success and count or 0
 end
 
--- ═══════════════════════════════════════
--- SINGLE FAKECHAR SYSTEM (STABLE & FAST)
--- ═══════════════════════════════════════
+-- SINGLE FAKECHAR SYSTEM
 local function destroySingleFake()
     if singleFake and singleFake.Parent then
         singleFake:Destroy()
@@ -252,92 +136,64 @@ local function startSingleFake()
 
     fakeThread = task.spawn(function()
         while farmActive and fake and fake.Parent do
-            local allCoins = getCoins()
-            if #allCoins > 0 then
-                local targetCoin = allCoins[math.random(1, #allCoins)]
-                if targetCoin and targetCoin:IsDescendantOf(workspace) then
-                    fake.CFrame = targetCoin.CFrame
-                    pcall(function()
+            pcall(function()
+                local allCoins = getCoins()
+                if #allCoins > 0 then
+                    local targetCoin = allCoins[math.random(1, #allCoins)]
+                    if targetCoin and targetCoin:IsDescendantOf(workspace) then
+                        fake.CFrame = targetCoin.CFrame
                         firetouchinterest(fake, targetCoin, 0)
                         firetouchinterest(fake, targetCoin, 1)
-                    end)
+                    end
                 end
-            end
-            task.wait(0.03)
+            end)
+            task.wait(0.04)
         end
     end)
 end
 
--- ═══════════════════════════════════════
--- MAIN UNDERGROUND & SMART ROLE LOOP
--- ═══════════════════════════════════════
+-- MAIN UNDERGROUND LOOP
 RunService.Heartbeat:Connect(function()
-    if not farmActive or pendingAction then return end
+    pcall(function()
+        if not farmActive or pendingAction then return end
 
-    local char = LocalPlayer.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if not hrp or not hum or hum.Health <= 0 then return end
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not hrp or not hum or hum.Health <= 0 then return end
 
-    -- Safe Underground Physics
-    hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
-    hum.PlatformStand = true
-    for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA("BasePart") then part.CanCollide = false end
-    end
-
-    -- Update Counter
-    collectedCoinsCount = getGameCoinCount()
-
-    -- Smart Role Action Trigger ( عند اكتمال 50 عملة أو شروط الأدوار)
-    if smartRoleActive and (collectedCoinsCount >= COIN_MAX_LIMIT) then
-        pendingAction = true
-        task.spawn(function()
-            if isLocalMurderer() then
-                for i = 1, 25 do killAllEnemies(); task.wait(0.1) end
-            elseif isLocalZombie() or countZombies() > 0 then
-                if countMurderers() >= 2 or collectedCoinsCount >= COIN_MAX_LIMIT then
-                    for i = 1, 25 do killAllEnemies(); task.wait(0.1) end
-                end
-            elseif isLocalSheriff() then
-                for i = 1, 25 do killAllEnemies(); task.wait(0.1) end
-            else
-                for i = 1, 25 do killAllEnemies(); task.wait(0.1) end
-            end
-            pendingAction = false
-        end)
-        return
-    end
-
-    -- Underground Movement & Collection
-    local coin = getNearestCoin()
-    if coin then
-        local targetPos = Vector3.new(coin.Position.X, coin.Position.Y - UNDER_OFFSET, coin.Position.Z)
-        local delta = targetPos - hrp.Position
-        
-        if delta.Magnitude > 0.5 then
-            hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * math.min(delta.Magnitude, FARM_SPEED * 0.03))
+        hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+        hum.PlatformStand = true
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") then part.CanCollide = false end
         end
-        
-        hrp.AssemblyLinearVelocity = Vector3.zero
-        hrp.AssemblyAngularVelocity = Vector3.zero
 
-        pcall(function()
+        collectedCoinsCount = getGameCoinCount()
+
+        local coin = getNearestCoin()
+        if coin then
+            local targetPos = Vector3.new(coin.Position.X, coin.Position.Y - UNDER_OFFSET, coin.Position.Z)
+            local delta = targetPos - hrp.Position
+            
+            if delta.Magnitude > 0.5 then
+                hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * math.min(delta.Magnitude, FARM_SPEED * 0.03))
+            end
+            
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+
             firetouchinterest(hrp, coin, 0)
             firetouchinterest(hrp, coin, 1)
-        end)
-    end
+        end
+    end)
 end)
 
--- ═══════════════════════════════════════
--- UI DESIGN & CUSTOM IMAGE INTEGRATION
--- ═══════════════════════════════════════
+-- UI INTERFACE SETUP
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AmoChereebUltimateV56"
+ScreenGui.Name = "AmoChereebUltimateV57"
 ScreenGui.Parent = CoreGui
 ScreenGui.ResetOnSpawn = false
 
--- Float Toggle Button with User Uploaded Image[cite: 1]
 local FloatBtn = Instance.new("ImageButton")
 FloatBtn.Size = UDim2.new(0, 70, 0, 70)
 FloatBtn.Position = UDim2.new(1, -85, 0.4, 0)
@@ -351,22 +207,13 @@ local FloatStroke = Instance.new("UIStroke", FloatBtn)
 FloatStroke.Thickness = 3
 FloatStroke.Color = Color3.fromRGB(255, 170, 0)
 
--- ربط الصورة الشخصية الدائرية التي أرسلتها[cite: 1]
 local FloatImg = Instance.new("ImageLabel")
 FloatImg.Size = UDim2.new(1, 0, 1, 0)
 FloatImg.BackgroundTransparency = 1
-FloatImg.Image = "rbxassetid://0A6FD77A-22F6-4D67-92E7-904409E69962" 
+FloatImg.Image = "rbxassetid://13214811808"
 FloatImg.Parent = FloatBtn
 Instance.new("UICorner", FloatImg).CornerRadius = UDim.new(1, 0)
 
--- Fallback في حال تطلب المنصة معرف رقمي للأصول
-pcall(function()
-    if not FloatImg.IsLoaded then
-        FloatImg.Image = "rbxassetid://13214811808"
-    end
-end)
-
--- Main Window Frame
 local MainFrame = Instance.new("Frame")
 MainFrame.Size = UDim2.new(0, 0, 0, 0)
 MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
@@ -381,7 +228,6 @@ local MainStroke = Instance.new("UIStroke", MainFrame)
 MainStroke.Thickness = 2.5
 MainStroke.Color = Color3.fromRGB(255, 170, 0)
 
--- Title Bar
 local TitleBar = Instance.new("Frame")
 TitleBar.Size = UDim2.new(1, 0, 0, 48)
 TitleBar.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
@@ -391,7 +237,7 @@ local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(1, -50, 1, 0)
 TitleText.Position = UDim2.new(0, 15, 0, 0)
 TitleText.BackgroundTransparency = 1
-TitleText.Text = "⚡ عمو تشريب Hub - v56"
+TitleText.Text = "⚡ عمو تشريب Hub - v57"
 TitleText.TextColor3 = Color3.fromRGB(255, 170, 0)
 TitleText.Font = Enum.Font.GothamBold
 TitleText.TextSize = 15
@@ -409,7 +255,6 @@ CloseBtn.TextSize = 16
 CloseBtn.Parent = TitleBar
 Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 8)
 
--- Coin Counter & Progress Tracker (Max 50)
 local CoinFrame = Instance.new("Frame")
 CoinFrame.Size = UDim2.new(1, -30, 0, 55)
 CoinFrame.Position = UDim2.new(0, 15, 0, 60)
@@ -440,40 +285,21 @@ ProgressBarFill.BackgroundColor3 = Color3.fromRGB(255, 170, 0)
 ProgressBarFill.Parent = ProgressBarBG
 Instance.new("UICorner", ProgressBarFill).CornerRadius = UDim.new(1, 0)
 
--- Progress Loop Updater
 task.spawn(function()
     while true do
-        local count = math.min(collectedCoinsCount, COIN_MAX_LIMIT)
-        CoinLabel.Text = "العملات المجمعة: " .. tostring(count) .. " / " .. tostring(COIN_MAX_LIMIT) .. " 🪙"
-        local percent = math.clamp(count / COIN_MAX_LIMIT, 0, 1)
-        TweenService:Create(ProgressBarFill, TweenInfo.new(0.3), {Size = UDim2.new(percent, 0, 1, 0)}):Play()
+        pcall(function()
+            local count = math.min(collectedCoinsCount, COIN_MAX_LIMIT)
+            CoinLabel.Text = "العملات المجمعة: " .. tostring(count) .. " / " .. tostring(COIN_MAX_LIMIT) .. " 🪙"
+            local percent = math.clamp(count / COIN_MAX_LIMIT, 0, 1)
+            TweenService:Create(ProgressBarFill, TweenInfo.new(0.3), {Size = UDim2.new(percent, 0, 1, 0)}):Play()
+        end)
         task.wait(0.3)
     end
 end)
 
--- Speed Control Slider / Section
-local SpeedFrame = Instance.new("Frame")
-SpeedFrame.Size = UDim2.new(1, -30, 0, 40)
-SpeedFrame.Position = UDim2.new(0, 15, 0, 125)
-SpeedFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
-SpeedFrame.Parent = MainFrame
-Instance.new("UICorner", SpeedFrame).CornerRadius = UDim.new(0, 10)
-
-local SpeedLabel = Instance.new("TextLabel")
-SpeedLabel.Size = UDim2.new(1, -20, 1, 0)
-SpeedLabel.Position = UDim2.new(0, 10, 0, 0)
-SpeedLabel.BackgroundTransparency = 1
-SpeedLabel.Text = "سرعة التجميع: " .. tostring(FARM_SPEED)
-SpeedLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
-SpeedLabel.Font = Enum.Font.GothamMedium
-SpeedLabel.TextSize:any = 12
-SpeedLabel.TextXAlignment = Enum.TextXAlignment.Left
-SpeedLabel.Parent = SpeedFrame
-
--- Toggles Container
 local Container = Instance.new("Frame")
 Container.Size = UDim2.new(1, -30, 0, 150)
-Container.Position = UDim2.new(0, 15, 0, 175)
+Container.Position = UDim2.new(0, 15, 0, 130)
 Container.BackgroundTransparency = 1
 Container.Parent = MainFrame
 
@@ -514,7 +340,7 @@ local function createToggle(yPos, text, icon, default, callback)
     end)
 end
 
-createToggle(0, "تجميع العملات تحت الأرض (Single Fake)", "🪙", false, function(st)
+createToggle(0, "تجميع العملات تحت الأرض", "🪙", false, function(st)
     farmActive = st
     if st then
         startSingleFake()
@@ -526,16 +352,15 @@ createToggle(0, "تجميع العملات تحت الأرض (Single Fake)", "�
     end
 end)
 
-createToggle(55, "فلنج القاتل التلقائي (Fling)", "🌪️", true, function(st) flingActive = st end)
-createToggle(110, "النظام الذكي للأدوار (Smart Roles)", "🧠", true, function(st) smartRoleActive = st end)
+createToggle(55, "فلنج القاتل التلقائي", "🌪️", true, function(st) flingActive = st end)
+createToggle(110, "الحماية والنظام الذكي", "🧠", true, function(st) smartRoleActive = st end)
 
--- UI Toggle Animation
 local isOpen = false
 local function toggleUI()
     isOpen = not isOpen
     if isOpen then
         MainFrame.Visible = true
-        MainFrame:TweenSize(UDim2.new(0, 320, 0, 360), Enum.EasingDirection.Out, Enum.EasingStyle.Back, 0.3, true)
+        MainFrame:TweenSize(UDim2.new(0, 320, 0, 310), Enum.EasingDirection.Out, Enum.EasingStyle.Back, 0.3, true)
     else
         MainFrame:TweenSize(UDim2.new(0, 0, 0, 0), Enum.EasingDirection.In, Enum.EasingStyle.Quad, 0.2, true, function()
             MainFrame.Visible = false
