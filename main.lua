@@ -1,9 +1,8 @@
 --[[
-    عمو تشريب Hub - Mobile v14
-    - REAL murderer detection (instant + loop 0.15s)
-    - REAL coin collection (walk to coin, natural touch)
-    - Smart fly for far coins only
-    - Fling murderer at 50 + on button press
+    عمو تشريب Hub - Mobile v15 (WALK ONLY + REAL FLING)
+    - Walk speed 27 (no fly, no teleport)
+    - Fling murderer: continuous every 0.3s until dead
+    - Reset at 50
 --]]
 
 local Players = game:GetService("Players")
@@ -15,20 +14,14 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 
 -- ========== Config ==========
-local walkSpeed = 27
-local FLY_SPEED = 100
-local FLY_THRESHOLD = 30 -- لو أبعد من 30 ستود → طيران
-local COLLECT_TIMEOUT = 2 -- ثانيتين max لكل كوين
+local walkSpeed = 27  -- سرعة ثابتة 27
 
 -- ========== States ==========
 local farmActive = false
 local flingMurdererActive = false
 local antiAFKActive = true
 local pendingRespawn = false
-local collectStartTime = 0
-local currentCoin = nil
 local lastFlingTime = 0
-local flingedList = {}
 
 -- ========== Anti-AFK ==========
 task.spawn(function()
@@ -43,12 +36,12 @@ task.spawn(function()
     end
 end)
 
--- ========== Speed ==========
+-- ========== Speed (fixed 27) ==========
 local function applySpeed()
     local char = LocalPlayer.Character
     if char then
         local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum and not farmActive then
+        if hum then
             hum.WalkSpeed = walkSpeed
             hum.PlatformStand = false
         end
@@ -57,9 +50,9 @@ end
 
 applySpeed()
 
--- ========== INSTANT Murderer Detection (4 methods) ==========
+-- ========== Murderer Detection (comprehensive) ==========
 local function getMurderer()
-    -- 1: Character equipped
+    -- Method 1: Equipped in character
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
         local char = player.Character
@@ -67,9 +60,13 @@ local function getMurderer()
             for _, item in ipairs(char:GetChildren()) do
                 if item:IsA("Tool") and item.Name == "Knife" then return player end
             end
+            -- Check descendants too
+            for _, item in ipairs(char:GetDescendants()) do
+                if item:IsA("Tool") and item.Name == "Knife" then return player end
+            end
         end
     end
-    -- 2: Backpack (search descendants for Knife tool)
+    -- Method 2: In Backpack
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
         local bp = player:FindFirstChild("Backpack")
@@ -79,63 +76,73 @@ local function getMurderer()
             end
         end
     end
-    -- 3: Workspace (equipped/dropped knife)
+    -- Method 3: Knife in workspace
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj:IsA("Tool") and obj.Name == "Knife" then
-            local char = obj.Parent
-            if char then
-                local plr = Players:GetPlayerFromCharacter(char)
+            local parent = obj.Parent
+            if parent then
+                local plr = Players:GetPlayerFromCharacter(parent)
                 if plr and plr ~= LocalPlayer then return plr end
             end
         end
     end
-    -- 4: Attributes
+    -- Method 4: Attributes
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
-        local role = player:GetAttribute("Role") or player:GetAttribute("role") or player:GetAttribute("GameRole")
-        if role then
-            local r = tostring(role):lower()
-            if r:find("murder") or r == "murderer" then return player end
-        end
+        local role = player:GetAttribute("Role") or player:GetAttribute("role")
+        if role and tostring(role):lower():find("murder") then return player end
     end
     return nil
 end
 
--- ========== Instant Fling ==========
+-- ========== REAL Fling (multi-method, continuous) ==========
 local function flingMurderer(murderer)
     if not murderer then return end
     task.spawn(function()
-        for attempt = 1, 15 do
+        for attempt = 1, 30 do
             local char = murderer.Character
             if not char then break end
             local hrp = char:FindFirstChild("HumanoidRootPart")
             local hum = char:FindFirstChildOfClass("Humanoid")
             if not hrp or not hum or hum.Health <= 0 then break end
 
+            -- Method 1: Velocity fling (spin + fly up)
             pcall(function()
-                local bv = Instance.new("BodyVelocity")
+                local bv = hrp:FindFirstChild("FlingBV") or Instance.new("BodyVelocity", hrp)
+                bv.Name = "FlingBV"
                 bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-                bv.Velocity = Vector3.new(math.random(-3000, 3000), 60000, math.random(-3000, 3000))
-                bv.Parent = hrp
-                task.delay(0.3, function() if bv and bv.Parent then bv:Destroy() end end)
+                bv.Velocity = Vector3.new(math.random(-5000, 5000), 100000, math.random(-5000, 5000))
             end)
 
+            -- Method 2: Angular velocity (spin)
             pcall(function()
-                local bav = Instance.new("BodyAngularVelocity")
+                local bav = hrp:FindFirstChild("FlingBAV") or Instance.new("BodyAngularVelocity", hrp)
+                bav.Name = "FlingBAV"
                 bav.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-                bav.AngularVelocity = Vector3.new(9999, 9999, 9999)
-                bav.Parent = hrp
-                task.delay(0.3, function() if bav and bav.Parent then bav:Destroy() end end)
+                bav.AngularVelocity = Vector3.new(99999, 99999, 99999)
             end)
 
+            -- Method 3: CFrame teleport to sky
             pcall(function()
-                hrp.CFrame = CFrame.new(math.random(-1000, 1000), 15000 + (attempt * 1000), math.random(-1000, 1000))
-                hrp.Velocity = Vector3.new(0, 25000, 0)
+                hrp.CFrame = CFrame.new(
+                    math.random(-2000, 2000),
+                    20000 + (attempt * 2000),
+                    math.random(-2000, 2000)
+                )
                 hum.PlatformStand = true
             end)
 
-            task.wait(0.12)
+            -- Method 4: Direct velocity
+            pcall(function()
+                hrp.Velocity = Vector3.new(math.random(-30000, 30000), 100000, math.random(-30000, 30000))
+                hrp.RotVelocity = Vector3.new(math.random(-500, 500), math.random(-500, 500), math.random(-500, 500))
+            end)
+
+            task.wait(0.08)
         end
+
+        -- Cleanup
+        task.wait(0.3)
         pcall(function()
             local hum = murderer.Character and murderer.Character:FindFirstChildOfClass("Humanoid")
             if hum then hum.PlatformStand = false end
@@ -143,39 +150,23 @@ local function flingMurderer(murderer)
     end)
 end
 
--- ========== Fast Murderer Loop (0.15s = instant) ==========
+-- ========== Continuous Murderer Fling (every 0.3s until dead) ==========
 task.spawn(function()
     while true do
-        task.wait(0.15)
+        task.wait(0.3)
         if flingMurdererActive and not pendingRespawn then
-            if tick() - lastFlingTime > 3 then
-                local murderer = getMurderer()
-                if murderer and murderer.Character then
-                    local hum = murderer.Character:FindFirstChildOfClass("Humanoid")
-                    if hum and hum.Health > 0 and not flingedList[murderer.UserId] then
-                        flingedList[murderer.UserId] = true
+            local murderer = getMurderer()
+            if murderer and murderer.Character then
+                local hum = murderer.Character:FindFirstChildOfClass("Humanoid")
+                if hum and hum.Health > 0 then
+                    if tick() - lastFlingTime > 1 then
                         lastFlingTime = tick()
+                        print("[Fling] Attacking: " .. murderer.Name)
                         flingMurderer(murderer)
-                        print("[Fling] Killed murderer: " .. murderer.Name)
                     end
                 end
             end
         end
-    end
-end)
-
--- Clean flingedList on new round
-task.spawn(function()
-    local remotes = ReplicatedStorage:WaitForChild("Remotes", 20)
-    if not remotes then return end
-    local gameplay = remotes:WaitForChild("Gameplay", 10)
-    if not gameplay then return end
-    local rs = gameplay:WaitForChild("RoundStart", 10)
-    if rs then
-        rs.OnClientEvent:Connect(function()
-            flingedList = {}
-            lastFlingTime = 0
-        end)
     end
 end)
 
@@ -212,8 +203,8 @@ task.spawn(function()
 end)
 
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 340, 0, 350)
-MainFrame.Position = UDim2.new(0.5, -170, 0.5, -175)
+MainFrame.Size = UDim2.new(0, 340, 0, 320)
+MainFrame.Position = UDim2.new(0.5, -170, 0.5, -160)
 MainFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
@@ -294,7 +285,7 @@ makeDraggable(TitleBar, MainFrame)
 
 local function makeToggle(yPos, text, icon, defaultState, callback)
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, -24, 0, 56)
+    btn.Size = UDim2.new(1, -24, 0, 60)
     btn.Position = UDim2.new(0, 12, 0, yPos)
     btn.BackgroundColor3 = defaultState and Color3.fromRGB(25, 70, 25) or Color3.fromRGB(22, 22, 22)
     btn.BorderSizePixel = 2
@@ -348,44 +339,9 @@ local function makeToggle(yPos, text, icon, defaultState, callback)
     return btn
 end
 
-local SpeedLabel = Instance.new("TextLabel")
-SpeedLabel.Size = UDim2.new(0, 170, 0, 34)
-SpeedLabel.Position = UDim2.new(0, 12, 0, 56)
-SpeedLabel.BackgroundTransparency = 1
-SpeedLabel.Text = "⚡ سرعة المشي"
-SpeedLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-SpeedLabel.Font = Enum.Font.GothamBold
-SpeedLabel.TextSize = 14
-SpeedLabel.TextXAlignment = Enum.TextXAlignment.Right
-SpeedLabel.Parent = MainFrame
-
-local SpeedBox = Instance.new("TextBox")
-SpeedBox.Size = UDim2.new(0, 80, 0, 34)
-SpeedBox.Position = UDim2.new(1, -100, 0, 56)
-SpeedBox.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
-SpeedBox.BorderSizePixel = 2
-SpeedBox.BorderColor3 = Color3.fromRGB(212, 175, 55)
-SpeedBox.Text = tostring(walkSpeed)
-SpeedBox.TextColor3 = Color3.fromRGB(212, 175, 55)
-SpeedBox.Font = Enum.Font.GothamBold
-SpeedBox.TextSize = 16
-SpeedBox.Parent = MainFrame
-Instance.new("UICorner", SpeedBox).CornerRadius = UDim.new(0, 10)
-
-SpeedBox.FocusLost:Connect(function()
-    local n = tonumber(SpeedBox.Text)
-    if n and n >= 16 and n <= 100 then
-        walkSpeed = n
-        if not farmActive then applySpeed() end
-    else
-        SpeedBox.Text = tostring(walkSpeed)
-    end
-end)
-
-local FarmBtn = makeToggle(100, "جمع تلقائي", "🌾", false, function(state)
+local FarmBtn = makeToggle(60, "جمع تلقائي", "🌾", false, function(state)
     farmActive = state
     if not state then
-        currentCoin = nil
         local char = LocalPlayer.Character
         if char then
             local hum = char:FindFirstChildOfClass("Humanoid")
@@ -393,46 +349,41 @@ local FarmBtn = makeToggle(100, "جمع تلقائي", "🌾", false, function(s
                 hum.PlatformStand = false
                 hum.WalkSpeed = walkSpeed
             end
-            for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") then part.CanCollide = true end
-            end
         end
     end
 end)
 
-local FlingMurdererBtn = makeToggle(166, "فلنك القاتل", "💥", false, function(state)
+local FlingMurdererBtn = makeToggle(130, "فلنك القاتل", "💥", false, function(state)
     flingMurdererActive = state
     if state then
         lastFlingTime = 0
-        flingedList = {}
-        -- 🔥 INSTANT FLING on button press!
+        -- Instant fling on activate
         task.spawn(function()
-            task.wait(0.2)
+            task.wait(0.3)
             local murderer = getMurderer()
             if murderer and murderer.Character then
                 local hum = murderer.Character:FindFirstChildOfClass("Humanoid")
                 if hum and hum.Health > 0 then
-                    flingedList[murderer.UserId] = true
                     lastFlingTime = tick()
                     flingMurderer(murderer)
                     print("[INSTANT] Flinged: " .. murderer.Name)
                 else
-                    print("[INSTANT] No murderer found yet, will keep checking...")
+                    print("[INSTANT] Murderer dead, waiting for next...")
                 end
             else
-                print("[INSTANT] No murderer found yet, will keep checking...")
+                print("[INSTANT] No murderer yet, will detect...")
             end
         end)
     end
 end)
 
-local AFKBtn = makeToggle(232, "مكافحة الطرد", "⏳", true, function(state)
+local AFKBtn = makeToggle(200, "مكافحة الطرد", "⏳", true, function(state)
     antiAFKActive = state
 end)
 
 local CoinPanel = Instance.new("Frame")
 CoinPanel.Size = UDim2.new(1, -24, 0, 44)
-CoinPanel.Position = UDim2.new(0, 12, 0, 296)
+CoinPanel.Position = UDim2.new(0, 12, 0, 268)
 CoinPanel.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
 CoinPanel.BorderSizePixel = 2
 CoinPanel.BorderColor3 = Color3.fromRGB(212, 175, 55)
@@ -508,7 +459,6 @@ end
 local function doAutoRespawn()
     if pendingRespawn then return end
     pendingRespawn = true
-    currentCoin = nil
 
     local char = LocalPlayer.Character
     if char then
@@ -519,6 +469,7 @@ local function doAutoRespawn()
         end
     end
 
+    -- Fling murderer before reset
     if flingMurdererActive then
         local murderer = getMurderer()
         if murderer and murderer.Character then
@@ -540,6 +491,7 @@ local function doAutoRespawn()
     pendingRespawn = false
 end
 
+-- Reset on 50 (event)
 task.spawn(function()
     local remotes = ReplicatedStorage:WaitForChild("Remotes", 10)
     if not remotes then return end
@@ -554,6 +506,7 @@ task.spawn(function()
     end)
 end)
 
+-- Reset polling backup
 task.spawn(function()
     while true do
         task.wait(0.3)
@@ -580,10 +533,10 @@ task.spawn(function()
     end
 end)
 
--- ========== FARM LOOP (REAL WALKING COLLECTION) ==========
+-- ========== FARM LOOP (WALK ONLY - 27 SPEED) ==========
 task.spawn(function()
     while true do
-        task.wait(0.05)
+        task.wait(0.1)
         pcall(function()
             if not farmActive or pendingRespawn then return end
 
@@ -592,49 +545,30 @@ task.spawn(function()
             local hum = char and char:FindFirstChildOfClass("Humanoid")
             if not hrp or not hum or hum.Health <= 0 then return end
 
+            -- Force walk speed 27
+            hum.PlatformStand = false
+            hum.WalkSpeed = walkSpeed
+            hum.JumpPower = 50
+
+            -- Restore collision (for proper collection)
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    if not part.CanCollide then part.CanCollide = true end
+                end
+            end
+
             local coin, dist = getNearestCoin()
             if not coin then return end
 
-            -- ========== MOVE TOWARD COIN ==========
-            hum.PlatformStand = false  -- ✨ CRITICAL: normal humanoid state
-            hum.WalkSpeed = walkSpeed
-            hum.JumpPower = 50
+            -- Walk to coin (Humanoid:MoveTo = natural walking)
             hum:MoveTo(coin.Position)
 
-            -- ========== COLLECT WHEN CLOSE ==========
-            if dist < 6 then
-                -- نوقف ونضرب touch (المشي يشتغل هذا)
+            -- Extra firetouchinterest when close (backup)
+            if dist < 5 then
                 pcall(function()
                     firetouchinterest(hrp, coin, 0)
-                    task.wait(0.05)
                     firetouchinterest(hrp, coin, 1)
                 end)
-            end
-
-            -- ========== FLY FOR FAR COINS (>30 studs) ==========
-            if dist > FLY_THRESHOLD then
-                -- طيران سريع (لكن آمن)
-                hum.PlatformStand = true
-                hum.WalkSpeed = 0
-                local targetPos = coin.Position + Vector3.new(0, 3, 0)
-                local delta = targetPos - hrp.Position
-                local step = math.min(FLY_SPEED * 0.05, delta.Magnitude - 5)
-                if step > 0 then
-                    hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * step)
-                end
-                -- اختراق جدران
-                for _, part in ipairs(char:GetDescendants()) do
-                    if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
-                        if part.CanCollide then part.CanCollide = false end
-                    end
-                end
-            else
-                -- قريب: نرجع طبيعي عشان الجمع يشتغل
-                for _, part in ipairs(char:GetDescendants()) do
-                    if part:IsA("BasePart") then
-                        if not part.CanCollide then part.CanCollide = true end
-                    end
-                end
             end
         end)
     end
@@ -672,8 +606,22 @@ RunService.Heartbeat:Connect(function()
     pcall(updateCoinInfo)
 end)
 
+-- Enforce walk speed 27 continuously
+RunService.Heartbeat:Connect(function()
+    pcall(function()
+        local char = LocalPlayer.Character
+        if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum and not pendingRespawn then
+                if hum.WalkSpeed ~= walkSpeed then
+                    hum.WalkSpeed = walkSpeed
+                end
+            end
+        end
+    end)
+end)
+
 LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(0.5)
-    currentCoin = nil
-    if not farmActive then applySpeed() end
+    applySpeed()
 end)
