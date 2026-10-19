@@ -1,9 +1,11 @@
 --[[
-    عمو تشريب Hub - Mobile v20 CLEAN 3 SYSTEMS
-    ============================================
-    System 1: FLY (Stepped + CFrame forced)
-    System 2: COINS (teleport-first + fly-rest)
-    System 3: FLING (comprehensive detect + CFrame to sky 0.05s)
+    عمو تشريب Hub - Mobile v21 FINAL-FIX
+    =====================================
+    - FLING: continuous velocity every frame (guaranteed kill)
+    - AUTO-FLING: on from start (server join)
+    - TELEPORT: instant to first coin
+    - FALL-FIX: HRP collidable + recovery teleport
+    - RESET: flings murderer before reset at 50
 --]]
 
 local Players = game:GetService("Players")
@@ -14,29 +16,27 @@ local CoreGui = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
 
--- ═══════════════════════════════════════════════
+-- ═══════════════════════════════════════
 -- CONFIG
--- ═══════════════════════════════════════════════
-local walkSpeed = 27         -- سرعة التجميع (قابلة للتعديل من الواجهة)
-local FLY_STEP_SPEED = 27    -- ستود/ثانية
-local HOVER_HEIGHT = 2       -- فوق الكوين
-local TELEPORT_THRESHOLD = 100  -- لو أبعد من 100 → تيليبورت أول مرة
+-- ═══════════════════════════════════════
+local walkSpeed = 27
+local FLY_SPEED = 27
+local HOVER_HEIGHT = 3
 
--- ═══════════════════════════════════════════════
+-- ═══════════════════════════════════════
 -- STATES
--- ═══════════════════════════════════════════════
+-- ═══════════════════════════════════════
 local farmActive = false
-local flingActive = false
+local flingActive = true   -- ← شغال افتراضياً (auto-fling)
 local antiAFKActive = true
 local pendingRespawn = false
 local lastResetTime = 0
 local ignoreCoins = {}
-local hasTeleportedToMap = false
-local lastResetRound = 0
+local hasTeleportedToFirstCoin = false
 
--- ═══════════════════════════════════════════════
+-- ═══════════════════════════════════════
 -- ANTI-AFK
--- ═══════════════════════════════════════════════
+-- ═══════════════════════════════════════
 task.spawn(function()
     while true do
         if antiAFKActive then
@@ -49,125 +49,133 @@ task.spawn(function()
     end
 end)
 
--- ═══════════════════════════════════════════════
--- SYSTEM 3: FLING (COMPREHENSIVE DETECT)
--- ═══════════════════════════════════════════════
+-- ═══════════════════════════════════════
+-- MURDERER DETECTION (5 methods)
+-- ═══════════════════════════════════════
 local function getMurderer()
-    -- METHOD 1: Check every player's character for a Knife tool
+    -- Method 1: Equipped tool in character
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
         local char = player.Character
         if char then
-            -- Direct children
-            for _, child in ipairs(char:GetChildren()) do
-                if child:IsA("Tool") then
-                    if child.Name:lower():find("knife") then
-                        return player
-                    end
-                end
-            end
-            -- All descendants (some games put knife in a folder)
-            for _, child in ipairs(char:GetDescendants()) do
-                if child:IsA("Tool") then
-                    if child.Name:lower():find("knife") then
+            for _, tool in ipairs(char:GetDescendants()) do
+                if tool:IsA("Tool") then
+                    local tn = tool.Name:lower()
+                    if tn:find("knife") or tn:find("murder") then
                         return player
                     end
                 end
             end
         end
     end
-
-    -- METHOD 2: Backpack
+    -- Method 2: Backpack
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
         local bp = player:FindFirstChild("Backpack")
         if bp then
-            for _, child in ipairs(bp:GetDescendants()) do
-                if child:IsA("Tool") then
-                    if child.Name:lower():find("knife") then
+            for _, tool in ipairs(bp:GetDescendants()) do
+                if tool:IsA("Tool") then
+                    local tn = tool.Name:lower()
+                    if tn:find("knife") or tn:find("murder") then
                         return player
                     end
                 end
             end
         end
     end
-
-    -- METHOD 3: All Knife tools in workspace
+    -- Method 3: Workspace
     for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("Tool") and obj.Name:lower():find("knife") then
-            local parent = obj.Parent
-            if parent then
-                local plr = Players:GetPlayerFromCharacter(parent)
-                if plr and plr ~= LocalPlayer then return plr end
-            end
-        end
-    end
-
-    -- METHOD 4: Attributes (Role, role, GameRole, Team)
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player == LocalPlayer then continue end
-        local role = player:GetAttribute("Role")
-                     or player:GetAttribute("role")
-                     or player:GetAttribute("GameRole")
-                     or player:GetAttribute("Team")
-        if role then
-            local r = tostring(role):lower()
-            if r:find("murder") or r == "killer" or r == "murderer" then
-                return player
-            end
-        end
-    end
-
-    -- METHOD 5: Team color (red team = murderer in some MM2 versions)
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player == LocalPlayer then continue end
-        if player.Team then
-            local teamName = player.Team.Name:lower()
-            if teamName:find("murder") or teamName:find("killer") then
-                return player
-            end
-        end
-    end
-
-    return nil
-end
-
--- ═══════════════════════════════════════════════
--- FLING LOOP (0.05s = 20 times/sec - MUST kill)
--- ═══════════════════════════════════════════════
-task.spawn(function()
-    while true do
-        task.wait(0.05)
-        if flingActive and not pendingRespawn then
-            local murderer = getMurderer()
-            if murderer and murderer.Character then
-                local hrp = murderer.Character:FindFirstChild("HumanoidRootPart")
-                local hum = murderer.Character:FindFirstChildOfClass("Humanoid")
-                if hrp and hum and hum.Health > 0 then
-                    -- Direct CFrame to sky (bypass anti-cheat)
-                    pcall(function()
-                        hrp.CFrame = CFrame.new(
-                            math.random(-100, 100),
-                            100000 + math.random(0, 50000),
-                            math.random(-100, 100)
-                        )
-                        hrp.Velocity = Vector3.new(
-                            math.random(-10000, 10000),
-                            100000,
-                            math.random(-10000, 10000)
-                        )
-                        hrp.AssemblyLinearVelocity = hrp.Velocity
-                        hum.PlatformStand = true
-                    end)
+        if obj:IsA("Tool") then
+            local tn = obj.Name:lower()
+            if tn:find("knife") or tn:find("murder") then
+                local parent = obj.Parent
+                if parent then
+                    local plr = Players:GetPlayerFromCharacter(parent)
+                    if plr and plr ~= LocalPlayer then return plr end
                 end
             end
         end
     end
+    -- Method 4: Attributes
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        for _, attrName in ipairs({"Role", "role", "GameRole", "Team", "Class"}) do
+            local role = player:GetAttribute(attrName)
+            if role then
+                local r = tostring(role):lower()
+                if r:find("murder") or r:find("killer") then
+                    return player
+                end
+            end
+        end
+    end
+    -- Method 5: Team name
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        if player.Team then
+            local tn = player.Team.Name:lower()
+            if tn:find("murder") or tn:find("killer") then
+                return player
+            end
+        end
+    end
+    return nil
+end
+
+-- ═══════════════════════════════════════
+-- FLING (velocity EVERY FRAME - GUARANTEED)
+-- ═══════════════════════════════════════
+RunService.Heartbeat:Connect(function()
+    if not flingActive or pendingRespawn then return end
+
+    local murderer = getMurderer()
+    if not murderer then return end
+
+    local char = murderer.Character
+    if not char then return end
+
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum or hum.Health <= 0 then return end
+
+    -- ═══ CORE FLING ═══
+    -- Disable collision
+    pcall(function()
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = false
+            end
+        end
+    end)
+
+    -- PlatformStand
+    pcall(function() hum.PlatformStand = true end)
+
+    -- Massively apply velocity EVERY FRAME (this is the key)
+    pcall(function()
+        hrp.AssemblyLinearVelocity = Vector3.new(
+            math.random(-500, 500),
+            500000 + math.random(0, 100000),
+            math.random(-500, 500)
+        )
+    end)
+
+    -- Also set Velocity (older property)
+    pcall(function()
+        hrp.Velocity = Vector3.new(0, 500000, 0)
+    end)
+
+    -- CFrame to sky (backup)
+    pcall(function()
+        if hrp.Position.Y < 3000 then
+            hrp.CFrame = CFrame.new(hrp.Position.X, 5000, hrp.Position.Z)
+        end
+    end)
 end)
 
--- ═══════════════════════════════════════════════
+-- ═══════════════════════════════════════
 -- HELPERS
--- ═══════════════════════════════════════════════
+-- ═══════════════════════════════════════
 local function getHRP()
     local char = LocalPlayer.Character
     return char and char:FindFirstChild("HumanoidRootPart")
@@ -228,15 +236,15 @@ local function isInRound()
     return (timer and timer.Visible) or (earnedXP and earnedXP.Visible)
 end
 
--- ═══════════════════════════════════════════════
+-- ═══════════════════════════════════════
 -- RESET
--- ═══════════════════════════════════════════════
+-- ═══════════════════════════════════════
 local function doAutoRespawn()
     if pendingRespawn then return end
     if tick() - lastResetTime < 5 then return end
     pendingRespawn = true
     lastResetTime = tick()
-    print("[RESET] 50 coins reached")
+    print("[RESET] 50 coins reached - flinging murderer then reset")
 
     local char = LocalPlayer.Character
     if char then
@@ -250,23 +258,20 @@ local function doAutoRespawn()
         end
     end
 
-    -- Fling murderer first
-    if flingActive then
-        local m = getMurderer()
-        if m and m.Character then
-            local h = m.Character:FindFirstChildOfClass("Humanoid")
-            if h and h.Health > 0 then
-                local hrp = m.Character:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    for i = 1, 30 do
-                        pcall(function()
-                            hrp.CFrame = CFrame.new(0, 100000, 0)
-                        end)
-                        task.wait(0.03)
-                    end
-                end
-                task.wait(1)
+    -- Fling murderer before reset (extra effort)
+    local m = getMurderer()
+    if m and m.Character then
+        for i = 1, 60 do
+            local h = m.Character and m.Character:FindFirstChildOfClass("Humanoid")
+            if not h or h.Health <= 0 then break end
+            local hrp = m.Character:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                pcall(function()
+                    hrp.AssemblyLinearVelocity = Vector3.new(0, 500000, 0)
+                    hrp.CFrame = CFrame.new(hrp.Position.X, 5000 + i * 500, hrp.Position.Z)
+                end)
             end
+            task.wait(0.05)
         end
     end
 
@@ -279,7 +284,7 @@ local function doAutoRespawn()
     task.wait(3)
     pendingRespawn = false
     ignoreCoins = {}
-    hasTeleportedToMap = false
+    hasTeleportedToFirstCoin = false
 end
 
 task.spawn(function()
@@ -296,9 +301,9 @@ task.spawn(function()
     end
 end)
 
--- ═══════════════════════════════════════════════
+-- ═══════════════════════════════════════
 -- GUI
--- ═══════════════════════════════════════════════
+-- ═══════════════════════════════════════
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "AmoChereebMobile"
 ScreenGui.Parent = CoreGui
@@ -467,9 +472,7 @@ local function makeToggle(yPos, text, icon, defaultState, callback)
     return btn
 end
 
--- ═══════════════════════════════════════════════
--- UI CONTROLS
--- ═══════════════════════════════════════════════
+-- Speed
 local SpeedLabel = Instance.new("TextLabel")
 SpeedLabel.Size = UDim2.new(0, 170, 0, 34)
 SpeedLabel.Position = UDim2.new(0, 12, 0, 56)
@@ -498,16 +501,17 @@ SpeedBox.FocusLost:Connect(function()
     local n = tonumber(SpeedBox.Text)
     if n and n >= 16 and n <= 100 then
         walkSpeed = n
-        FLY_STEP_SPEED = n
+        FLY_SPEED = n
     else
         SpeedBox.Text = tostring(walkSpeed)
     end
 end)
 
+-- Toggles
 local FarmBtn = makeToggle(100, "طيران + جمع", "✈️", false, function(state)
     farmActive = state
     if state then
-        hasTeleportedToMap = false
+        hasTeleportedToFirstCoin = false
     else
         local char = LocalPlayer.Character
         if char then
@@ -524,7 +528,7 @@ local FarmBtn = makeToggle(100, "طيران + جمع", "✈️", false, function
     end
 end)
 
-local FlingBtn = makeToggle(170, "فلنك القاتل", "💥", false, function(state)
+local FlingBtn = makeToggle(170, "فلنك القاتل", "💥", true, function(state)
     flingActive = state
 end)
 
@@ -532,6 +536,7 @@ local AFKBtn = makeToggle(240, "مكافحة الطرد", "⏳", true, function(
     antiAFKActive = state
 end)
 
+-- Coin info
 local CoinPanel = Instance.new("Frame")
 CoinPanel.Size = UDim2.new(1, -24, 0, 44)
 CoinPanel.Position = UDim2.new(0, 12, 0, 320)
@@ -583,9 +588,9 @@ FloatBtn.InputEnded:Connect(function(input)
     end
 end)
 
--- ═══════════════════════════════════════════════
--- SYSTEM 1+2: FLY + COINS (Stepped = before physics)
--- ═══════════════════════════════════════════════
+-- ═══════════════════════════════════════
+-- FARM LOOP (Stepped - before physics)
+-- ═══════════════════════════════════════
 RunService.Stepped:Connect(function()
     pcall(function()
         if not farmActive or pendingRespawn then return end
@@ -601,46 +606,51 @@ RunService.Stepped:Connect(function()
         hum.JumpPower = 0
         hum.AutoRotate = false
 
-        -- Noclip all parts
+        -- Noclip ONLY non-HRP parts
         for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") and part.CanCollide then
-                part.CanCollide = false
+            if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+                if part.CanCollide then part.CanCollide = false end
             end
         end
+        -- HRP stays collidable (prevent fall-through)
+        hrp.CanCollide = true
 
         -- Find coin
         local coin, dist = getNearestCoin()
         if not coin then return end
 
-        -- ═══ TELEPORT FIRST (map entry - once) ═══
-        if not hasTeleportedToMap and dist > TELEPORT_THRESHOLD then
+        -- ═══ TELEPORT TO FIRST COIN (instant) ═══
+        if not hasTeleportedToFirstCoin then
             hrp.CFrame = CFrame.new(coin.Position + Vector3.new(0, HOVER_HEIGHT, 0))
             hrp.Velocity = Vector3.zero
             hrp.AssemblyLinearVelocity = Vector3.zero
-            hasTeleportedToMap = true
+            hasTeleportedToFirstCoin = true
             return
         end
 
-        -- ═══ FLY TO COIN (safe step) ═══
-        local targetPos = coin.Position + Vector3.new(0, HOVER_HEIGHT, 0)
-        local delta = targetPos - hrp.Position
-        local flyDist = delta.Magnitude
-
-        if flyDist > 2 then
-            local step = math.min(FLY_STEP_SPEED / 60, flyDist)
-            local newPos = hrp.Position + delta.Unit * step
-            hrp.CFrame = CFrame.new(newPos, targetPos)
-        else
-            -- On coin
-            hrp.CFrame = CFrame.new(targetPos)
+        -- ═══ RECOVERY: if fell below floor ═══
+        if hrp.Position.Y < -50 then
+            hrp.CFrame = CFrame.new(coin.Position + Vector3.new(0, HOVER_HEIGHT, 0))
+            hrp.Velocity = Vector3.zero
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            return
         end
 
-        -- Zero velocity (no fall)
+        -- ═══ FLY to coin ═══
+        local target = coin.Position + Vector3.new(0, HOVER_HEIGHT, 0)
+        local delta = target - hrp.Position
+        if delta.Magnitude > 1 then
+            local step = math.min(FLY_SPEED / 60, delta.Magnitude)
+            local newPos = hrp.Position + delta.Unit * step
+            hrp.CFrame = CFrame.new(newPos)
+        end
+
+        -- Zero velocity (no falling)
         hrp.Velocity = Vector3.zero
         hrp.AssemblyLinearVelocity = Vector3.zero
         hrp.RotVelocity = Vector3.zero
 
-        -- ═══ COLLECT (touch from all parts) ═══
+        -- ═══ COLLECT ═══
         if dist < 6 then
             for _, part in ipairs(char:GetDescendants()) do
                 if part:IsA("BasePart") then
@@ -661,7 +671,7 @@ RunService.Stepped:Connect(function()
     end)
 end)
 
--- Coin info
+-- Coin info update
 local function updateCoinInfo()
     local cur, mx = getCoinCount()
     local count = #getAllCoins()
@@ -672,10 +682,10 @@ RunService.Heartbeat:Connect(function()
     pcall(updateCoinInfo)
 end)
 
--- Respawn
+-- Respawn handler
 LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(0.5)
-    hasTeleportedToMap = false
+    hasTeleportedToFirstCoin = false
     if not farmActive then
         local hum = char:FindFirstChildOfClass("Humanoid")
         if hum then hum.WalkSpeed = 16 end
