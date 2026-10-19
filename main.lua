@@ -1,11 +1,10 @@
 --[[
-    عمو تشريب Hub - Mobile v34 SMART
-    ==================================
-    - 3-phase system: idle → scanning → farming
-    - Detects roles BEFORE flying (no sky bug)
-    - Speed 15 default (slower)
-    - Zombie + Sheriff merged
-    - Fling murderer instantly on detection
+    عمو تشريب Hub - Mobile v35 FAST
+    =================================
+    - No stop / no descent
+    - Multi-collect: up to 4 coins at once from 15 studs
+    - 3-phase scan → farm
+    - All features preserved
 --]]
 
 local Players = game:GetService("Players")
@@ -22,12 +21,15 @@ local LocalPlayer = Players.LocalPlayer
 -- ═══════════════════════════════════════
 local walkSpeed = 15
 local FLY_SPEED = 15
-local COLLECT_RADIUS = 1.5
+local HOVER_HEIGHT = 2
+local COLLECT_RANGE = 15       -- ✅ مسافة الجمع (من بعيد)
+local MULTI_COLLECT = 4        -- ✅ عدد الكوينز في المرة
+local MAX_ATTEMPTS = 3         -- محاولات قبل تجاهل
 local DANGER_DIST = 15
 local KNIFE_DANGER = 20
 local COIN_LIMIT = 50
 local FARM_MIN_TIME = 15
-local SCAN_DURATION = 3       -- ✅ 3 ثواني سكان قبل البدء
+local SCAN_DURATION = 3
 
 -- ═══════════════════════════════════════
 -- STATES
@@ -41,24 +43,18 @@ local lastResetTime = 0
 local farmStartedAt = 0
 local lastCoinCount = 0
 local stuckCoins = {}
+local coinAttempts = {}
 local cachedMurderer = nil
 local cachedZombies = {}
 local currentCoin = nil
-local coinAttemptStart = 0
 local sheriffKillInProgress = false
 local activelyFlinging = {}
 local escapeTarget = nil
 local escapeUntil = 0
-local collectingCoin = false
-local collectStartedAt = 0
 
--- ✅ PHASE SYSTEM
-local phase = "idle"           -- idle / scanning / farming
+-- Phase system
+local phase = "idle"  -- idle / scanning / farming
 local scanStart = 0
-local detectedMurderer = nil
-local detectedSheriff = nil
-local detectedZombies = {}
-local detectionComplete = false
 
 -- ═══════════════════════════════════════
 -- ANTI-AFK
@@ -76,7 +72,7 @@ task.spawn(function()
 end)
 
 -- ═══════════════════════════════════════
--- DETECTION HELPERS
+-- DETECTION
 -- ═══════════════════════════════════════
 local function isPlayerMurderer(player)
     if not player or player == LocalPlayer then return false end
@@ -95,23 +91,6 @@ local function isPlayerMurderer(player)
     for _, attr in ipairs({"Role", "role", "GameRole"}) do
         local r = player:GetAttribute(attr)
         if r and tostring(r):lower():find("murder") then return true end
-    end
-    return false
-end
-
-local function isPlayerSheriff(player)
-    if not player or player == LocalPlayer then return false end
-    local char = player.Character
-    if char then
-        for _, item in ipairs(char:GetChildren()) do
-            if item:IsA("Tool") and item.Name:lower():find("gun") then return true end
-        end
-    end
-    local bp = player:FindFirstChild("Backpack")
-    if bp then
-        for _, item in ipairs(bp:GetChildren()) do
-            if item:IsA("Tool") and item.Name:lower():find("gun") then return true end
-        end
     end
     return false
 end
@@ -185,37 +164,6 @@ local function isLocalMurderer()
     return false
 end
 
--- ✅ FULL SCAN (detects all roles at once)
-local function fullScan()
-    detectedMurderer = nil
-    detectedSheriff = nil
-    detectedZombies = {}
-
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player == LocalPlayer then continue end
-
-        if isPlayerZombie(player) then
-            table.insert(detectedZombies, player)
-        elseif isPlayerMurderer(player) then
-            detectedMurderer = player
-        elseif isPlayerSheriff(player) then
-            detectedSheriff = player
-        end
-    end
-
-    -- Also cache globally
-    cachedMurderer = detectedMurderer
-    cachedZombies = detectedZombies
-
-    detectionComplete = true
-    print("[SCAN] Murderer:", detectedMurderer and detectedMurderer.Name or "None",
-          "| Sheriff:", detectedSheriff and detectedSheriff.Name or "None",
-          "| Zombies:", #detectedZombies)
-end
-
--- ═══════════════════════════════════════
--- COUNTERS
--- ═══════════════════════════════════════
 local function countMurderers()
     local c = 0
     for _, p in ipairs(Players:GetPlayers()) do
@@ -231,6 +179,26 @@ local function countZombies()
     end
     return c
 end
+
+task.spawn(function()
+    while true do
+        task.wait(0.2)
+        local found = nil
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and isPlayerMurderer(player) then
+                found = player
+                break
+            end
+        end
+        cachedMurderer = found
+        cachedZombies = {}
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and isPlayerZombie(player) then
+                table.insert(cachedZombies, player)
+            end
+        end
+    end
+end)
 
 -- ═══════════════════════════════════════
 -- FLING
@@ -303,23 +271,16 @@ local function killAll(exceptFn)
     end
 end
 
--- ═══════════════════════════════════════
--- CONTINUOUS FLING (murderer)
--- ═══════════════════════════════════════
 RunService.Heartbeat:Connect(function()
     if not flingActive or pendingRespawn then return end
     if sheriffKillInProgress then return end
-    if not cachedMurderer or cachedMurderer == LocalPlayer then return end
+    if not cachedMurderer then return end
     if activelyFlinging[tostring(cachedMurderer.UserId)] then return end
     flingPlayer(cachedMurderer)
 end)
 
--- ═══════════════════════════════════════
--- SMART ALL (zombie + sheriff combined)
--- ═══════════════════════════════════════
 RunService.Heartbeat:Connect(function()
     if not smartAllActive or pendingRespawn then return end
-    -- Zombie mode
     if isLocalZombie() then
         if countMurderers() >= 2 or countZombies() >= 2 then
             killAll(isPlayerZombie)
@@ -384,6 +345,24 @@ local function getAllCoins()
     return coins
 end
 
+-- ✅ NEW: get multiple coins in range
+local function getCoinsInRange(pos, radius, maxCount)
+    local coins = getAllCoins()
+    local list = {}
+    for _, coin in ipairs(coins) do
+        local d = (coin.Position - pos).Magnitude
+        if d < radius then
+            table.insert(list, {coin = coin, dist = d})
+        end
+    end
+    table.sort(list, function(a, b) return a.dist < b.dist end)
+    local result = {}
+    for i = 1, math.min(maxCount, #list) do
+        table.insert(result, list[i].coin)
+    end
+    return result
+end
+
 local function getNearestCoin()
     local hrp = getHRP()
     if not hrp then return nil end
@@ -424,7 +403,7 @@ local function getUICoinCount()
 end
 
 -- ═══════════════════════════════════════
--- HANDLE 50 COINS
+-- HANDLE 50
 -- ═══════════════════════════════════════
 local function handle50Coins()
     if pendingRespawn then return end
@@ -435,36 +414,32 @@ local function handle50Coins()
     local char = LocalPlayer.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
 
-    -- Zombie: kill all non-zombies
     if isLocalZombie() and smartAllActive then
         for i = 1, 80 do killAll(isPlayerZombie); task.wait(0.05) end
         if hum then hum.PlatformStand = false; hum.WalkSpeed = 16 end
         if hum and hum.Health > 0 then pcall(function() hum.Health = 0 end) end
-        task.wait(3); pendingRespawn = false; stuckCoins = {}; farmStartedAt = tick(); currentCoin = nil; lastCoinCount = 0; collectingCoin = false
+        task.wait(3); pendingRespawn = false; stuckCoins = {}; coinAttempts = {}; farmStartedAt = tick(); currentCoin = nil; lastCoinCount = 0
         return
     end
 
-    -- Murderer: kill all
     if isLocalMurderer() then
         for i = 1, 80 do killAll(nil); task.wait(0.05) end
         if hum then hum.PlatformStand = false; hum.WalkSpeed = 16 end
         if hum and hum.Health > 0 then pcall(function() hum.Health = 0 end) end
-        task.wait(3); pendingRespawn = false; stuckCoins = {}; farmStartedAt = tick(); currentCoin = nil; lastCoinCount = 0; collectingCoin = false
+        task.wait(3); pendingRespawn = false; stuckCoins = {}; coinAttempts = {}; farmStartedAt = tick(); currentCoin = nil; lastCoinCount = 0
         return
     end
 
-    -- Sheriff: kill nearest enemy (merged with zombie - if 2+ murderers or any zombies)
     if isLocalSheriff() and smartAllActive then
         if countMurderers() >= 2 or countZombies() > 0 then
             killNearestEnemy()
             if hum then hum.PlatformStand = false; hum.WalkSpeed = 16 end
             if hum and hum.Health > 0 then pcall(function() hum.Health = 0 end) end
-            task.wait(3); pendingRespawn = false; stuckCoins = {}; farmStartedAt = tick(); currentCoin = nil; lastCoinCount = 0; collectingCoin = false
+            task.wait(3); pendingRespawn = false; stuckCoins = {}; coinAttempts = {}; farmStartedAt = tick(); currentCoin = nil; lastCoinCount = 0
             return
         end
     end
 
-    -- Normal reset
     if char then
         if hum then hum.PlatformStand = false; hum.WalkSpeed = 16 end
         for _, part in ipairs(char:GetDescendants()) do
@@ -472,11 +447,11 @@ local function handle50Coins()
         end
     end
     if hum and hum.Health > 0 then pcall(function() hum.Health = 0 end) end
-    task.wait(3); pendingRespawn = false; stuckCoins = {}; farmStartedAt = tick(); currentCoin = nil; lastCoinCount = 0; collectingCoin = false
+    task.wait(3); pendingRespawn = false; stuckCoins = {}; coinAttempts = {}; farmStartedAt = tick(); currentCoin = nil; lastCoinCount = 0
 end
 
 -- ═══════════════════════════════════════
--- FARM LOOP (with PHASE system)
+-- FARM LOOP (MULTI-COLLECT, no stop, no descent)
 -- ═══════════════════════════════════════
 RunService.Heartbeat:Connect(function()
     pcall(function()
@@ -487,59 +462,52 @@ RunService.Heartbeat:Connect(function()
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         if not hrp or not hum or hum.Health <= 0 then return end
 
-        -- ═══ PHASE: SCANNING (3 seconds, no fly) ═══
+        -- Phase: scanning
         if phase == "scanning" then
-            fullScan()
-            -- Fling murderer immediately if detected
-            if detectedMurderer and detectedMurderer.Character 
-               and not activelyFlinging[tostring(detectedMurderer.UserId)] then
-                flingPlayer(detectedMurderer)
-            end
-
             if tick() - scanStart < SCAN_DURATION then
-                return  -- ✅ لا يطير خلال السكان
+                -- Fling murderer if detected during scan
+                if cachedMurderer and cachedMurderer.Character 
+                   and not activelyFlinging[tostring(cachedMurderer.UserId)] then
+                    flingPlayer(cachedMurderer)
+                end
+                return
             else
                 phase = "farming"
                 stuckCoins = {}
+                coinAttempts = {}
                 currentCoin = nil
-                coinAttemptStart = tick()
                 farmStartedAt = tick()
                 lastCoinCount = 0
-                print("[PHASE] Scanning complete → Farming")
             end
         end
 
-        -- ═══ PHASE: FARMING ═══
         if phase ~= "farming" then return end
 
-        -- Check for coins (lobby protection)
+        -- Lobby check
         local allCoins = getAllCoins()
-        local currentMapCoinCount = #allCoins
-
-        if currentMapCoinCount == 0 then
-            -- No coins - go back to scanning
+        if #allCoins == 0 then
             phase = "scanning"
             scanStart = tick()
             return
         end
 
-        -- New round detection
-        if lastCoinCount == 0 and currentMapCoinCount > 5 then
+        -- Reset detection
+        if lastCoinCount == 0 and #allCoins > 5 then
             farmStartedAt = tick()
             stuckCoins = {}
+            coinAttempts = {}
             currentCoin = nil
-            collectingCoin = false
         end
-        lastCoinCount = currentMapCoinCount
+        lastCoinCount = #allCoins
 
-        -- Reset check
+        -- 50-coin check
         local uiCur, uiMax = getUICoinCount()
         if uiMax >= 40 and uiCur >= uiMax and tick() - farmStartedAt > FARM_MIN_TIME then
             handle50Coins()
             return
         end
 
-        -- Escape
+        -- Escape check
         local danger = nil
         if cachedMurderer and cachedMurderer.Character then
             local mHRP = cachedMurderer.Character:FindFirstChild("HumanoidRootPart")
@@ -566,55 +534,7 @@ RunService.Heartbeat:Connect(function()
             end
         end
 
-        local targetCoin = currentCoin
-        if escapeTarget and tick() < escapeUntil then
-            targetCoin = escapeTarget
-        else
-            escapeTarget = nil
-        end
-
-        if not targetCoin or not targetCoin:IsDescendantOf(workspace) then
-            targetCoin = getNearestCoin()
-            currentCoin = targetCoin
-            coinAttemptStart = tick()
-            collectingCoin = false
-        end
-        if not targetCoin then return end
-        currentCoin = targetCoin
-
-        -- ═══ COLLECTING ═══
-        if collectingCoin then
-            local target = currentCoin
-            if not target or not target:IsDescendantOf(workspace) then
-                collectingCoin = false
-                currentCoin = nil
-                coinAttemptStart = tick()
-                return
-            end
-
-            hum.PlatformStand = false
-            hum.WalkSpeed = 0
-            hrp.CFrame = CFrame.new(target.Position)
-            hrp.Velocity = Vector3.zero
-            hrp.AssemblyLinearVelocity = Vector3.zero
-
-            for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") then
-                    pcall(function() firetouchinterest(part, target, 0) end)
-                    pcall(function() firetouchinterest(part, target, 1) end)
-                end
-            end
-
-            if tick() - collectStartedAt > 3 then
-                stuckCoins[target] = true
-                collectingCoin = false
-                currentCoin = nil
-                coinAttemptStart = tick()
-            end
-            return
-        end
-
-        -- ═══ MOVING TO COIN (safe fly) ═══
+        -- ═══ ALWAYS FLY (no stop, no descent) ═══
         hum.PlatformStand = true
         hum.WalkSpeed = 0
         hum.JumpPower = 0
@@ -626,37 +546,60 @@ RunService.Heartbeat:Connect(function()
             end
         end
 
-        local target = targetCoin.Position + Vector3.new(0, 3, 0)
-        local delta = target - hrp.Position
+        -- ═══ MULTI-COLLECT: grab up to 4 coins in 15 studs ═══
+        local nearby = getCoinsInRange(hrp.Position, COLLECT_RANGE, MULTI_COLLECT)
+        if #nearby > 0 then
+            for _, coin in ipairs(nearby) do
+                -- Fire touch from all parts
+                for _, part in ipairs(char:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        pcall(function() firetouchinterest(part, coin, 0) end)
+                        pcall(function() firetouchinterest(part, coin, 1) end)
+                    end
+                end
+                pcall(function() firetouchinterest(hrp, coin, 0) end)
+                pcall(function() firetouchinterest(hrp, coin, 1) end)
+
+                -- Track attempts
+                coinAttempts[coin] = (coinAttempts[coin] or 0) + 1
+                if coinAttempts[coin] > MAX_ATTEMPTS then
+                    stuckCoins[coin] = true
+                end
+            end
+            currentCoin = nil
+            return  -- Move to next batch next frame
+        end
+
+        -- ═══ FLY to nearest coin (stays at HOVER_HEIGHT) ═══
+        local target = currentCoin
+        if not target or not target:IsDescendantOf(workspace) then
+            target = getNearestCoin()
+            currentCoin = target
+        end
+        if not target then return end
+
+        local targetPos = target.Position + Vector3.new(0, HOVER_HEIGHT, 0)
+        local delta = targetPos - hrp.Position
         local dist = delta.Magnitude
 
-        -- Safety: if dist is 0, skip
-        if dist < 0.1 then return end
-
-        -- Close enough? Start collecting
-        if dist < COLLECT_RADIUS then
-            collectingCoin = true
-            collectStartedAt = tick()
-            return
+        if dist > 0.5 then
+            local step = math.min(FLY_SPEED / 60, dist - 1)
+            if step > 0 then
+                hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * step)
+            end
         end
 
-        -- ✅ SAFE FLY (small CFrame step)
-        local step = math.min(FLY_SPEED / 60, dist - 1.5)
-        if step > 0 and step < dist then
-            hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * step)
-        end
         hrp.Velocity = Vector3.zero
         hrp.AssemblyLinearVelocity = Vector3.zero
         hrp.RotVelocity = Vector3.zero
 
-        -- ✅ ANTI-SKY BUG: if flying too high, reset
-        if hrp.Position.Y > targetCoin.Position.Y + 15 then
-            hrp.CFrame = CFrame.new(hrp.Position.X, targetCoin.Position.Y + 3, hrp.Position.Z)
+        -- Anti-sky bug
+        if hrp.Position.Y > target.Position.Y + 20 then
+            hrp.CFrame = CFrame.new(hrp.Position.X, target.Position.Y + HOVER_HEIGHT, hrp.Position.Z)
             hrp.Velocity = Vector3.zero
         end
-        -- Recovery if fell
         if hrp.Position.Y < -50 then
-            hrp.CFrame = CFrame.new(targetCoin.Position + Vector3.new(0, 3, 0))
+            hrp.CFrame = CFrame.new(target.Position + Vector3.new(0, HOVER_HEIGHT, 0))
             hrp.Velocity = Vector3.zero
         end
     end)
@@ -913,15 +856,12 @@ local FarmBtn = makeToggle(56, "طيران + جمع + هروب", "✈️", false
     if state then
         phase = "scanning"
         scanStart = tick()
-        detectionComplete = false
         stuckCoins = {}
+        coinAttempts = {}
         currentCoin = nil
-        coinAttemptStart = tick()
         farmStartedAt = tick()
         lastCoinCount = 0
         escapeTarget = nil
-        collectingCoin = false
-        print("[PHASE] Starting scan...")
     else
         phase = "idle"
         local char = LocalPlayer.Character
@@ -933,7 +873,6 @@ local FarmBtn = makeToggle(56, "طيران + جمع + هروب", "✈️", false
             end
         end
         currentCoin = nil
-        collectingCoin = false
     end
 end)
 
@@ -1039,13 +978,12 @@ local function updateCoinInfo()
     else roleTag = " 👤"
     end
     local escapeTag = escapeTarget and " 🏃" or ""
-    local collectTag = collectingCoin and " ✋" or ""
     local lobbyTag = (mapCount == 0) and " (لوبي)" or ""
     local phaseTag = ""
     if phase == "scanning" then phaseTag = " 🔍"
     elseif phase == "farming" then phaseTag = " 🌾"
     end
-    CoinInfo.Text = "🪙 " .. displayCount .. "/" .. displayMax .. roleTag .. escapeTag .. collectTag .. phaseTag .. lobbyTag
+    CoinInfo.Text = "🪙 " .. displayCount .. "/" .. displayMax .. roleTag .. escapeTag .. phaseTag .. lobbyTag
 end
 
 RunService.Heartbeat:Connect(function()
@@ -1055,15 +993,12 @@ end)
 LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(0.5)
     currentCoin = nil
-    coinAttemptStart = tick()
     sheriffKillInProgress = false
     activelyFlinging = {}
     escapeTarget = nil
-    collectingCoin = false
     if farmActive then
         phase = "scanning"
         scanStart = tick()
-        detectionComplete = false
     end
     if not farmActive then
         local hum = char:FindFirstChildOfClass("Humanoid")
