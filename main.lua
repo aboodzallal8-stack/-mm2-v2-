@@ -1,23 +1,22 @@
--- Debug build: instrumentation for UI, coin collection, map detection, HRP collisions
--- Paste this in place of your current script and run it, then copy Output logs or screenshot the debug overlay.
+-- AMO Debug build v2 (fixed UI layout, auto-start farm, coin validation, HRP ground safety)
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
 local VirtualUser = game:GetService("VirtualUser")
-local CoreGui = game:GetService("CoreGui")
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 local LocalPlayer = Players.LocalPlayer
 while not LocalPlayer do task.wait(0.1); LocalPlayer = Players.LocalPlayer end
 
--- CONFIG (same as before)
+-- CONFIG
 local FARM_SPEED = 30
-local UNDER_OFFSET = 8
 local COIN_MAX_LIMIT = 50
 local SAFE_FALL_Y = -100
+local HOVER_HEIGHT = 3          -- how high above the ground the HRP stays while farming
+local COLLECT_RADIUS = 4        -- horizontal distance to attempt touch
+local BLACKLIST_TIME = 10       -- seconds a failed coin is ignored
 
-local farmActive = false
+local farmActive = true         -- auto-start on entry
 local flingActive = true
 local smartRoleActive = true
 local antiAFKActive = true
@@ -27,48 +26,44 @@ local coinsCache = {}
 local lastCacheUpdate = 0
 local currentTargetCoin = nil
 local coinTargetStartTime = 0
-local blacklistedCoins = {}
+local blacklistedCoins = {}     -- [coin] = expiry tick
 local hasResetForMax = false
 
-local function safeParent(instance, parent)
-    if instance and parent then
-        pcall(function() instance.Parent = parent end)
-    end
-end
-
--- small helper to safe print (prefix)
 local function dbg(...)
-    local ok, msg = pcall(function() return table.concat({...}, " ") end)
-    if ok then
-        print("[AMO-DBG] " .. msg)
-    else
-        print("[AMO-DBG] (unable to format debug message)")
-    end
+    local ok, msg = pcall(function()
+        local t = {}
+        for i = 1, select("#", ...) do t[i] = tostring((select(i, ...))) end
+        return table.concat(t, " ")
+    end)
+    print("[AMO-DBG] " .. (ok and msg or "(unable to format)"))
 end
 
--- ANTI-AFK (unchanged)
+local function isBlacklisted(coin)
+    local exp = blacklistedCoins[coin]
+    if not exp then return false end
+    if tick() >= exp then blacklistedCoins[coin] = nil; return false end
+    return true
+end
+
+-- ANTI-AFK
 task.spawn(function()
     while true do
         if antiAFKActive then
             pcall(function()
-                if VirtualUser then
-                    VirtualUser:CaptureController()
-                    VirtualUser:ClickButton2(Vector2.new())
-                end
+                VirtualUser:CaptureController()
+                VirtualUser:ClickButton2(Vector2.new())
             end)
         end
         task.wait(30)
     end
 end)
 
--- GUI-authoritative coin count
+-- GUI coin count (authoritative)
 local function getGameCoinCount()
     local ok, result = pcall(function()
         local mainGui = LocalPlayer.PlayerGui:FindFirstChild("MainGUI")
-        if not mainGui then return 0 end
-        local gameGui = mainGui:FindFirstChild("Game")
-        if not gameGui then return 0 end
-        local coinBags = gameGui:FindFirstChild("CoinBags")
+        local gameGui = mainGui and mainGui:FindFirstChild("Game")
+        local coinBags = gameGui and gameGui:FindFirstChild("CoinBags")
         if not coinBags then return 0 end
         for _, bag in ipairs(coinBags:GetDescendants()) do
             if bag:IsA("TextLabel") and bag.Name == "Coins" then
@@ -78,69 +73,36 @@ local function getGameCoinCount()
         end
         return 0
     end)
-    if not ok then dbg("getGameCoinCount pcall failed:", result) end
     return ok and result or 0
 end
 
--- periodic authoritative update
-task.spawn(function()
-    while true do
-        local ok, val = pcall(getGameCoinCount)
-        if ok then
-            if collectedCoinsCount ~= val then
-                dbg("GUI coins updated:", val, "(was:", collectedCoinsCount, ")")
-            end
-            collectedCoinsCount = val
-        else
-            dbg("getGameCoinCount failed in periodic update")
-        end
-        if collectedCoinsCount >= COIN_MAX_LIMIT and not hasResetForMax then
-            hasResetForMax = true
-            dbg("Reached coin limit (authoritative), resetting character")
-            pcall(function()
-                local char = LocalPlayer.Character
-                if char and char:FindFirstChildOfClass("Humanoid") then
-                    char:FindFirstChildOfClass("Humanoid").Health = 0
-                end
-            end)
-        end
-        task.wait(0.2)
-    end
-end)
-
--- Map / lobby detection helpers
-local function getTopLevelAncestor(part)
-    local p = part
-    while p and p.Parent and p.Parent ~= workspace do p = p.Parent end
-    if p and p.Parent == workspace then return p end
-    return nil
-end
-
-local function modelCenter(model)
-    if not model then return nil end
-    if model.PrimaryPart then return model.PrimaryPart.Position end
-    local sum = Vector3.new(0,0,0); local count = 0
-    for _, d in ipairs(model:GetDescendants()) do
-        if d:IsA("BasePart") then
-            sum = sum + d.Position
-            count = count + 1
-            if count >= 12 then break end
-        end
-    end
-    if count > 0 then return sum / count end
-    return nil
-end
-
-local function findPlayerMap()
+local function getCharacterParts()
     local char = LocalPlayer.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    return char, hrp, hum
+end
+
+-- Map detection: pick the workspace child whose bounding box contains the HRP,
+-- falling back to nearest center.
+local function findPlayerMap()
+    local _, hrp = getCharacterParts()
     if not hrp then return nil end
     local best, bestd = nil, math.huge
     for _, child in ipairs(workspace:GetChildren()) do
         if child:IsA("Model") or child:IsA("Folder") then
-            local c = modelCenter(child)
-            if c then
-                local d = (hrp.Position - c).Magnitude
+            local ok, cf, size = pcall(function()
+                if child:IsA("Model") then return child:GetBoundingBox() end
+            end)
+            if ok and cf and size then
+                local rel = cf:PointToObjectSpace(hrp.Position)
+                if math.abs(rel.X) <= size.X / 2 and math.abs(rel.Y) <= size.Y / 2 and math.abs(rel.Z) <= size.Z / 2 then
+                    return child
+                end
+            end
+            local center = child:IsA("Model") and select(1, pcall(child.GetPivot, child)) and child:GetPivot().Position
+            if center then
+                local d = (hrp.Position - center).Magnitude
                 if d < bestd then bestd = d; best = child end
             end
         end
@@ -148,76 +110,49 @@ local function findPlayerMap()
     return best
 end
 
--- coin validation
-local function hasTouchTransmitter(part)
-    if not part then return false end
-    if part:FindFirstChildWhichIsA("TouchTransmitter") then return true end
-    if part:FindFirstChild("TouchInterest") then return true end
-    return false
+local function isLobby(map)
+    return map and map.Name:lower():find("lobby") ~= nil
 end
 
-local function looksCoinLike(part)
-    if not part then return false end
-    local n = (part.Name or ""):lower(); local pn = (part.Parent and part.Parent.Name or ""):lower()
-    if n:find("coin") or pn:find("coin") then return true end
-    return false
-end
-
-local function isRealAndExistingCoin(part)
+-- Coin validation: must be a visible, touchable part inside the current map.
+local function isRealCoin(part)
     if not part or not part:IsA("BasePart") then return false end
     if not part:IsDescendantOf(workspace) then return false end
-    if part.Transparency and part.Transparency > 0.5 then return false end
-    if hasTouchTransmitter(part) then return true end
-    if looksCoinLike(part) then return true end
-    return false
-end
-
-local function findGroundYAt(posXZ)
-    local origin = Vector3.new(posXZ.X, workspace:GetExtentsSize().Y + 100, posXZ.Z)
-    local params = RaycastParams.new()
-    params.FilterDescendantsInstances = {LocalPlayer.Character}
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    local res = workspace:Raycast(origin, Vector3.new(0, -1000, 0), params)
-    return res and res.Position and res.Position.Y or nil
+    if part.Transparency >= 0.5 or not part.CanTouch then return false end
+    if part.Size.Magnitude < 0.1 then return false end
+    local hasTouch = part:FindFirstChildWhichIsA("TouchTransmitter") or part:FindFirstChild("TouchInterest")
+    if not hasTouch then return false end
+    local n = part.Name:lower()
+    local pn = part.Parent and part.Parent.Name:lower() or ""
+    return n:find("coin") ~= nil or pn:find("coin") ~= nil
 end
 
 local function getValidCoins()
-    if tick() - lastCacheUpdate < 0.12 then return coinsCache end
+    if tick() - lastCacheUpdate < 0.25 then return coinsCache end
     lastCacheUpdate = tick()
     coinsCache = {}
 
     local playerMap = findPlayerMap()
-    if playerMap and playerMap.Name:lower():find("lobby") then
-        dbg("Player is in Lobby, returning 0 coins.")
-        return coinsCache
-    end
+    if isLobby(playerMap) then return coinsCache end
 
     local seen = {}
-    pcall(function()
-        for _, obj in ipairs(workspace:GetDescendants()) do
-            if obj and obj:IsA("BasePart") and not seen[obj] and not blacklistedCoins[obj] then
-                if isRealAndExistingCoin(obj) then
-                    local top = getTopLevelAncestor(obj)
-                    if (playerMap and top == playerMap) or (not playerMap and (not top or not top.Name:lower():find("lobby"))) then
-                        table.insert(coinsCache, obj); seen[obj] = true
-                    end
-                end
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and not seen[obj] and not isBlacklisted(obj) and isRealCoin(obj) then
+            if playerMap == nil or obj:IsDescendantOf(playerMap) then
+                table.insert(coinsCache, obj)
+                seen[obj] = true
             end
         end
-    end)
-    dbg("Found coins:", #coinsCache)
+    end
     return coinsCache
 end
 
-local function getSmartNearestCoin()
-    local char = LocalPlayer.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+local function getNearestCoin()
+    local _, hrp = getCharacterParts()
     if not hrp then return nil end
-    local all = getValidCoins()
-    if #all == 0 then return nil end
     local best, bestd = nil, math.huge
-    for _, c in ipairs(all) do
-        if c and c.Parent and c:IsDescendantOf(workspace) then
+    for _, c in ipairs(getValidCoins()) do
+        if c.Parent and c:IsDescendantOf(workspace) then
             local d = (hrp.Position - c.Position).Magnitude
             if d < bestd then bestd = d; best = c end
         end
@@ -225,305 +160,243 @@ local function getSmartNearestCoin()
     return best
 end
 
-local function cleanupPhysics()
-    pcall(function()
-        local char = LocalPlayer.Character
-        if not char then return end
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if hrp then
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.AssemblyAngularVelocity = Vector3.zero
-            hrp.CanCollide = true
-        end
-        if hum then hum.PlatformStand = false end
-        for _, p in ipairs(char:GetDescendants()) do
-            if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then p.CanCollide = false end
-        end
-    end)
+-- Ground detection: raycast down from above the HRP, ignoring the character.
+local function findGroundBelow(pos)
+    local char = LocalPlayer.Character
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = { char }
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    local res = workspace:Raycast(pos + Vector3.new(0, 200, 0), Vector3.new(0, -1000, 0), params)
+    return res and res.Position.Y or nil
 end
 
-LocalPlayer.CharacterAdded:Connect(function()
+-- Keep the character physically grounded: HRP and humanoid collide, limbs don't.
+local function setCharacterPhysics(char)
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    for _, p in ipairs(char:GetDescendants()) do
+        if p:IsA("BasePart") then
+            p.CanCollide = (p == hrp)
+        end
+    end
+    if hum then
+        hum.PlatformStand = false
+        hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+    end
+end
+
+LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(1)
-    cleanupPhysics()
+    setCharacterPhysics(char)
     blacklistedCoins = {}
     hasResetForMax = false
     currentTargetCoin = nil
-    dbg("CharacterAdded: reset blacklists / flags")
+    dbg("CharacterAdded: reset state")
 end)
 
-local function triggerUndergroundTouch(coin, char, hrp)
-    if not coin or not coin.Parent or not hrp then return false end
-    local ok = pcall(function()
-        firetouchinterest(hrp, coin, 0); firetouchinterest(hrp, coin, 1)
-        task.wait(0.03)
-        for _, part in ipairs(char:GetChildren()) do
-            if part:IsA("BasePart") then
-                firetouchinterest(part, coin, 0); firetouchinterest(part, coin, 1)
-            end
-        end
-    end)
-    return ok
-end
-
+-- Touch the coin from the character. Returns true if the GUI count increased.
 local function attemptCollectCoin(coin, char, hrp)
-    if not coin or not coin.Parent or not char or not hrp then return false end
     local before = getGameCoinCount()
-    dbg("Attempting collect on coin:", coin.Name or "(noname)", "position:", coin.Position, "beforeGUI:", before)
-    for i = 1, 3 do
-        triggerUndergroundTouch(coin, char, hrp)
-        task.wait(0.06)
+    dbg("Attempt collect:", coin.Name, "before:", before)
+    for _ = 1, 3 do
+        pcall(function()
+            firetouchinterest(hrp, coin, 0)
+            firetouchinterest(hrp, coin, 1)
+        end)
+        task.wait(0.05)
     end
     local deadline = tick() + 0.9
     while tick() < deadline do
-        local now = getGameCoinCount()
-        if now and now > before then
-            dbg("Collect confirmed. before:", before, "after:", now)
-            collectedCoinsCount = now
-            if collectedCoinsCount >= COIN_MAX_LIMIT and not hasResetForMax then
-                hasResetForMax = true
-                dbg("Max reached during attemptCollectCoin, resetting char")
-                pcall(function()
-                    local h = char:FindFirstChildOfClass("Humanoid")
-                    if h then h.Health = 0 end
-                end)
-            end
-            return true
-        end
+        if getGameCoinCount() > before then return true end
         task.wait(0.08)
     end
-    dbg("Collect not confirmed -> blacklisting coin:", coin)
-    blacklistedCoins[coin] = true
     return false
 end
 
--- MAIN LOOP (keeps behavior but logs)
+-- MAIN LOOP
+local lastTargetPos
 RunService.Heartbeat:Connect(function(dt)
+    if not farmActive then return end
     pcall(function()
-        if not farmActive then return end
-
         collectedCoinsCount = getGameCoinCount()
 
         if collectedCoinsCount >= COIN_MAX_LIMIT and not hasResetForMax then
             hasResetForMax = true
-            dbg("Reached coin limit in main loop, resetting char")
-            pcall(function()
-                local char = LocalPlayer.Character
-                if char and char:FindFirstChildOfClass("Humanoid") then
-                    char:FindFirstChildOfClass("Humanoid").Health = 0
-                end
-            end)
+            dbg("Coin limit reached, resetting character")
+            local _, _, hum = getCharacterParts()
+            if hum then hum.Health = 0 end
             return
         end
 
-        local char = LocalPlayer.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if not hrp or not hum or hum.Health <= 0 then return end
+        local char, hrp, hum = getCharacterParts()
+        if not char or not hrp or not hum or hum.Health <= 0 then return end
+        setCharacterPhysics(char)
 
         if hrp.Position.Y < SAFE_FALL_Y then
-            dbg("HRP below SAFE_FALL_Y:", hrp.Position.Y, "teleporting up")
-            pcall(function()
-                local spawn = LocalPlayer.RespawnLocation or workspace:FindFirstChild("SpawnLocation")
-                if spawn and spawn.Position then hrp.CFrame = CFrame.new(spawn.Position + Vector3.new(0,5,0))
-                else hrp.CFrame = hrp.CFrame + Vector3.new(0,50,0) end
-            end)
+            dbg("Fell out of map at Y", hrp.Position.Y, "- respawning position")
+            local spawn = workspace:FindFirstChildWhichIsA("SpawnLocation")
+            hrp.CFrame = spawn and (spawn.CFrame + Vector3.new(0, 5, 0)) or CFrame.new(0, 50, 0)
             return
         end
 
-        local allCoins = getValidCoins()
-        if #allCoins == 0 then
+        local coin = getNearestCoin()
+        if not coin then
             currentTargetCoin = nil
-            cleanupPhysics()
             return
         end
 
-        if currentTargetCoin and (not currentTargetCoin.Parent or not currentTargetCoin:IsDescendantOf(workspace)) then
-            dbg("Current target invalidated:", currentTargetCoin)
+        if coin ~= currentTargetCoin then
+            currentTargetCoin = coin
+            coinTargetStartTime = tick()
+        elseif tick() - coinTargetStartTime > 6 then
+            dbg("Coin unreachable, blacklisting:", coin.Name)
+            blacklistedCoins[coin] = tick() + BLACKLIST_TIME
             currentTargetCoin = nil
+            return
         end
 
-        hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
-        hum.PlatformStand = false
+        -- Walk along the ground toward the coin, staying above the floor.
+        local groundY = findGroundBelow(hrp.Position) or hrp.Position.Y
+        local targetXZ = Vector3.new(coin.Position.X, 0, coin.Position.Z)
+        local hrpXZ = Vector3.new(hrp.Position.X, 0, hrp.Position.Z)
+        local delta = targetXZ - hrpXZ
+        local dist = delta.Magnitude
+        local step = math.min(dist, FARM_SPEED * dt)
+        local newXZ = dist > 0.01 and hrpXZ + delta.Unit * step or hrpXZ
 
-        for _, p in ipairs(char:GetDescendants()) do
-            if p:IsA("BasePart") then
-                if p.Name == "HumanoidRootPart" then p.CanCollide = true else p.CanCollide = false end
-            end
-        end
+        local floorY = findGroundBelow(Vector3.new(newXZ.X, hrp.Position.Y, newXZ.Z)) or groundY
+        local newY = math.max(floorY + HOVER_HEIGHT, hrp.Position.Y - 3)
+        hrp.CFrame = CFrame.new(newXZ.X, newY, newXZ.Z)
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
 
-        local coin = getSmartNearestCoin()
-        if coin then
-            dbg("Nearest coin:", coin, "pos:", coin.Position)
-            if not coin.Parent or coin.Transparency > 0.8 then
-                dbg("Coin invalid (parent/transparency), blacklisting:", coin)
-                blacklistedCoins[coin] = true
-                currentTargetCoin = nil
-                return
-            end
-
-            if coin ~= currentTargetCoin then
-                currentTargetCoin = coin
-                coinTargetStartTime = tick()
-                dbg("New target set:", coin)
+        -- Attempt collection only when horizontally close and not far vertically.
+        local horiz = (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(coin.Position.X, 0, coin.Position.Z)).Magnitude
+        if horiz <= COLLECT_RADIUS and math.abs(hrp.Position.Y - coin.Position.Y) <= 8 then
+            local ok = attemptCollectCoin(coin, char, hrp)
+            if ok then
+                dbg("Collected:", coin.Name)
             else
-                if tick() - coinTargetStartTime > 0.9 then
-                    dbg("Stuck on coin too long, blacklisting:", coin)
-                    blacklistedCoins[coin] = true
-                    currentTargetCoin = nil
-                    return
-                end
+                dbg("Collect failed, blacklisting:", coin.Name)
+                blacklistedCoins[coin] = tick() + BLACKLIST_TIME
             end
-
-            local groundY = findGroundYAt(coin.Position)
-            local desiredY = coin.Position.Y - UNDER_OFFSET
-            if groundY then desiredY = math.max(desiredY, groundY + 0.8) else desiredY = math.max(desiredY, SAFE_FALL_Y + 50) end
-            local targetPos = Vector3.new(coin.Position.X, desiredY, coin.Position.Z)
-            local delta = targetPos - hrp.Position
-            local moveStep = math.min(delta.Magnitude, FARM_SPEED * dt)
-            if delta.Magnitude > 0.05 then hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * moveStep) else hrp.CFrame = CFrame.new(targetPos) end
-
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.AssemblyAngularVelocity = Vector3.zero
-
-            dbg("HRP pos:", hrp.Position, "HRP.CanCollide:", hrp.CanCollide)
-
-            local horizDist = (Vector3.new(hrp.Position.X,0,hrp.Position.Z) - Vector3.new(coin.Position.X,0,coin.Position.Z)).Magnitude
-            if horizDist <= 1.5 and math.abs(hrp.Position.Y - coin.Position.Y) <= 6 then
-                local collected = attemptCollectCoin(coin, char, hrp)
-                if collected then dbg("Collected coin:", coin); blacklistedCoins[coin] = nil; currentTargetCoin = nil; return
-                else dbg("Failed collect for coin:", coin); currentTargetCoin = nil; return end
-            end
+            currentTargetCoin = nil
         end
     end)
 end)
 
--- UI (parent to PlayerGui to ensure clicks work). Add an on-screen debug panel.
+-- ==================== UI ====================
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "AmoChereeb_DebugUI"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.IgnoreGuiInset = true
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-safeParent(ScreenGui, LocalPlayer:WaitForChild("PlayerGui"))
+ScreenGui.Parent = PlayerGui
 
-local FloatBtn = Instance.new("ImageButton")
-FloatBtn.Size = UDim2.new(0,70,0,70)
-FloatBtn.Position = UDim2.new(1,-85,0.4,0)
-FloatBtn.BackgroundColor3 = Color3.fromRGB(15,15,20)
-FloatBtn.Image = "rbxassetid://0"
+local FloatBtn = Instance.new("TextButton")
+FloatBtn.Size = UDim2.new(0, 70, 0, 70)
+FloatBtn.Position = UDim2.new(1, -85, 0.4, 0)
+FloatBtn.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+FloatBtn.Text = "AMO"
+FloatBtn.TextColor3 = Color3.fromRGB(240, 240, 240)
+FloatBtn.Font = Enum.Font.GothamBold
+FloatBtn.TextSize = 14
 FloatBtn.AutoButtonColor = true
 FloatBtn.Parent = ScreenGui
-Instance.new("UICorner", FloatBtn).CornerRadius = UDim.new(1,0)
+Instance.new("UICorner", FloatBtn).CornerRadius = UDim.new(1, 0)
 
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0,320,0,310)
-MainFrame.Position = UDim2.new(0.5,0,0.5,0)
-MainFrame.AnchorPoint = Vector2.new(0.5,0.5)
-MainFrame.BackgroundColor3 = Color3.fromRGB(12,12,16)
+MainFrame.Size = UDim2.new(0, 320, 0, 420)
+MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+MainFrame.BackgroundColor3 = Color3.fromRGB(12, 12, 16)
 MainFrame.Visible = false
 MainFrame.Parent = ScreenGui
-Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0,18)
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 18)
 
--- Debug panel (small)
-local DebugBox = Instance.new("Frame")
-DebugBox.Size = UDim2.new(0,300,0,140)
-DebugBox.Position = UDim2.new(0,10,0,160)
-DebugBox.BackgroundColor3 = Color3.fromRGB(20,20,26)
-DebugBox.Parent = MainFrame
-Instance.new("UICorner", DebugBox).CornerRadius = UDim.new(0,8)
+local Layout = Instance.new("UIListLayout")
+Layout.Padding = UDim.new(0, 8)
+Layout.SortOrder = Enum.SortOrder.LayoutOrder
+Layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+Layout.Parent = MainFrame
 
-local function makeLabel(y, text)
+local Padding = Instance.new("UIPadding")
+Padding.PaddingTop = UDim.new(0, 14)
+Padding.PaddingLeft = UDim.new(0, 14)
+Padding.PaddingRight = UDim.new(0, 14)
+Padding.Parent = MainFrame
+
+local function makeToggle(order, text, default, callback)
+    local btn = Instance.new("TextButton")
+    btn.LayoutOrder = order
+    btn.Size = UDim2.new(1, 0, 0, 36)
+    btn.Text = ""
+    btn.Font = Enum.Font.Gotham
+    btn.TextSize = 14
+    btn.TextColor3 = Color3.fromRGB(240, 240, 240)
+    btn.Parent = MainFrame
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+
+    local state = default
+    local function render()
+        btn.BackgroundColor3 = state and Color3.fromRGB(30, 70, 40) or Color3.fromRGB(25, 25, 35)
+        btn.Text = text .. (state and ": ON" or ": OFF")
+    end
+    render()
+
+    btn.MouseButton1Click:Connect(function()
+        state = not state
+        render()
+        pcall(callback, state)
+    end)
+    return btn
+end
+
+makeToggle(1, "Farm", farmActive, function(st) farmActive = st; dbg("farmActive:", st) end)
+makeToggle(2, "Fling", flingActive, function(st) flingActive = st end)
+makeToggle(3, "Smart Role", smartRoleActive, function(st) smartRoleActive = st end)
+
+-- Debug labels
+local function makeLabel(order, text)
     local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(1,-20,0,20)
-    lbl.Position = UDim2.new(0,10,0,y)
+    lbl.LayoutOrder = order
+    lbl.Size = UDim2.new(1, 0, 0, 20)
     lbl.BackgroundTransparency = 1
     lbl.Text = text
-    lbl.TextColor3 = Color3.fromRGB(220,220,220)
+    lbl.TextColor3 = Color3.fromRGB(220, 220, 220)
     lbl.Font = Enum.Font.Gotham
-    lbl.TextSize = 14
+    lbl.TextSize = 13
     lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.Parent = DebugBox
+    lbl.Parent = MainFrame
     return lbl
 end
 
-local dbgFarm = makeLabel(6, "FarmActive: false")
-local dbgCoinsFound = makeLabel(30, "CoinsFound: 0")
-local dbgGUICoins = makeLabel(54, "GUI Coins: 0")
-local dbgTarget = makeLabel(78, "Target: nil")
-local dbgHRP = makeLabel(102, "HRP Y/CanCollide: n/a")
-local dbgMap = makeLabel(126, "Map: unknown")
+local dbgCoinsFound = makeLabel(10, "CoinsFound: 0")
+local dbgGUICoins   = makeLabel(11, "GUI Coins: 0")
+local dbgTarget     = makeLabel(12, "Target: nil")
+local dbgHRP        = makeLabel(13, "HRP: n/a")
+local dbgMap        = makeLabel(14, "Map: unknown")
 
--- UI toggles area (re-implement minimal toggles)
-local Container = Instance.new("Frame")
-Container.Size = UDim2.new(1,-30,0,120)
-Container.Position = UDim2.new(0,15,0,20)
-Container.BackgroundTransparency = 1
-Container.Parent = MainFrame
-
-local function createToggle(yPos, text, default, callback)
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1,0,0,36)
-    btn.Position = UDim2.new(0,0,0,yPos)
-    btn.BackgroundColor3 = default and Color3.fromRGB(30,70,40) or Color3.fromRGB(25,25,35)
-    btn.Text = text
-    btn.TextColor3 = Color3.fromRGB(240,240,240)
-    btn.Font = Enum.Font.Gotham
-    btn.TextSize = 14
-    btn.Parent = Container
-    btn.AutoButtonColor = true
-    local state = default
-    btn.MouseButton1Click:Connect(function()
-        state = not state
-        btn.BackgroundColor3 = state and Color3.fromRGB(30,70,40) or Color3.fromRGB(25,25,35)
-        dbg("Toggle:", text, "->", state)
-        pcall(callback, state)
-    end)
-    -- touch fallback
-    btn.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch then
-            state = not state
-            btn.BackgroundColor3 = state and Color3.fromRGB(30,70,40) or Color3.fromRGB(25,25,35)
-            dbg("Touch Toggle:", text, "->", state)
-            pcall(callback, state)
-        end
-    end)
-end
-
-createToggle(0, "Toggle Farm", false, function(st) farmActive = st; dbg("farmActive set to", farmActive); dbgFarm.Text = "FarmActive: " .. tostring(farmActive) end)
-createToggle(40, "Fling Active", true, function(st) flingActive = st; dbg("flingActive:", flingActive) end)
-createToggle(80, "Smart Role", true, function(st) smartRoleActive = st; dbg("smartRoleActive:", smartRoleActive) end)
-
--- FloatBtn click handling (two listeners to be resilient)
 FloatBtn.MouseButton1Click:Connect(function()
     MainFrame.Visible = not MainFrame.Visible
-    dbg("FloatBtn clicked (MouseButton1Click). MainFrame.Visible =", MainFrame.Visible)
-end)
-FloatBtn.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.Touch then
-        MainFrame.Visible = not MainFrame.Visible
-        dbg("FloatBtn touched (InputBegan). MainFrame.Visible =", MainFrame.Visible)
-    end
 end)
 
--- update debug labels frequently
 task.spawn(function()
     while true do
         pcall(function()
-            local cMap = findPlayerMap()
-            dbgCoinsFound.Text = ("CoinsFound: %d"):format(#(coinsCache or {}))
-            dbgGUICoins.Text = ("GUI Coins: %d"):format(collectedCoinsCount or 0)
-            dbgTarget.Text = ("Target: %s"):format(tostring(currentTargetCoin and (currentTargetCoin.Name or tostring(currentTargetCoin)) or "nil"))
-            local hrp = (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart"))
-            if hrp then
-                dbgHRP.Text = ("HRP Y: %.2f  CanCollide: %s"):format(hrp.Position.Y, tostring(hrp.CanCollide))
-            else
-                dbgHRP.Text = "HRP Y/CanCollide: n/a"
-            end
-            dbgMap.Text = "Map: " .. (cMap and (cMap.Name or "unnamed") or "nil")
+            local _, hrp = getCharacterParts()
+            local m = findPlayerMap()
+            dbgCoinsFound.Text = ("CoinsFound: %d"):format(#coinsCache)
+            dbgGUICoins.Text = ("GUI Coins: %d"):format(collectedCoinsCount)
+            dbgTarget.Text = "Target: " .. (currentTargetCoin and currentTargetCoin.Name or "nil")
+            dbgHRP.Text = hrp and ("HRP Y: %.2f  CanCollide: %s"):format(hrp.Position.Y, tostring(hrp.CanCollide)) or "HRP: n/a"
+            dbgMap.Text = "Map: " .. (m and m.Name or "nil")
         end)
-        task.wait(0.18)
+        task.wait(0.2)
     end
 end)
 
--- add prints within getValidCoins and attemptCollectCoin are already doing dbg(...)
-dbg("Debug UI loaded. Click the floating button to open the panel. Use toggles to start/stop farm.")
+dbg("Loaded. Farm is ON by default. Click AMO to open the panel.")
