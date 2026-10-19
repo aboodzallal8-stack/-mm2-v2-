@@ -1,10 +1,10 @@
 --[[
-    عمو تشريب Hub - Mobile v44 UNDER-8 + REAL COLLECT
-    ===================================================
-    - Character flies 8 studs UNDER the map (invisible)
-    - Pops up for 2 frames to collect (server registers touch)
-    - Returns underground instantly
-    - isCollecting lock prevents conflict
+    عمو تشريب Hub - Mobile v45 STABLE
+    ====================================
+    - BodyPosition Y-lock (no fall, no death)
+    - Zero velocity every frame
+    - Y safety net
+    - Fall state disabled
 --]]
 
 local Players = game:GetService("Players")
@@ -21,9 +21,9 @@ local LocalPlayer = Players.LocalPlayer
 -- ═══════════════════════════════════════
 local walkSpeed = 60
 local FLY_SPEED = 60
-local UNDER_OFFSET = 8              -- ✅ تحت الأرض 8
+local UNDER_OFFSET = 8
 local COLLECT_RANGE = 40
-local COLLECT_INTERVAL = 0.1
+local COLLECT_INTERVAL = 0.15
 local COLLECT_PER_BATCH = 3
 local DANGER_DIST = 12
 local KNIFE_DANGER = 18
@@ -54,7 +54,7 @@ local activelyFlinging = {}
 local escapeTarget = nil
 local escapeUntil = 0
 local firstTeleportDone = false
-local isCollecting = false           -- ✅ قفل الجمع
+local isCollecting = false
 
 local phase = "idle"
 local scanStart = 0
@@ -400,24 +400,36 @@ local function getUICoinCount()
 end
 
 -- ═══════════════════════════════════════
--- ✅ COLLECT: pop up, touch, back down (2 frames)
+-- ✅ SAFE COLLECT (Y-lock with BodyPosition)
 -- ═══════════════════════════════════════
-local function collectCoin(coin, char, hrp)
+local function collectCoin(coin, char, hrp, hum)
     if not coin or not coin.Parent or not coin:IsDescendantOf(workspace) then return end
     if not char or not hrp then return end
 
-    -- احفظ موقع تحت الأرض
-    local undergroundCF = hrp.CFrame
+    local savedCF = hrp.CFrame
 
-    -- 1️⃣ اطلع فوق الكوين
+    -- Remove AntiFall temporarily
+    local oldBP = hrp:FindFirstChild("AntiFall")
+    if oldBP then oldBP:Destroy() end
+
+    hum.PlatformStand = false
+
+    -- Move to coin
     hrp.CFrame = CFrame.new(coin.Position + Vector3.new(0, 0.5, 0))
     hrp.Velocity = Vector3.zero
     hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
 
-    -- 2️⃣ انتظر فريم (server يسجل)
-    task.wait()
+    -- Add BodyPosition at coin Y (locks Y so no fall during wait)
+    local bp = Instance.new("BodyPosition")
+    bp.Name = "AntiFall"
+    bp.MaxForce = Vector3.new(0, math.huge, 0) -- Y only
+    bp.P = 100000
+    bp.D = 1000
+    bp.Position = Vector3.new(coin.Position.X, coin.Position.Y + 0.5, coin.Position.Z)
+    bp.Parent = hrp
 
-    -- 3️⃣ firetouch من كل الأجزاء
+    -- Fire touch
     pcall(function()
         firetouchinterest(hrp, coin, 0)
         firetouchinterest(hrp, coin, 1)
@@ -431,13 +443,19 @@ local function collectCoin(coin, char, hrp)
         end
     end
 
-    -- 4️⃣ انتظر فريم ثاني
+    -- Wait for server (BP holds Y - no fall)
     task.wait()
 
-    -- 5️⃣ ارجع تحت الأرض فوراً
-    hrp.CFrame = undergroundCF
+    -- Return to underground
+    hrp.CFrame = savedCF
     hrp.Velocity = Vector3.zero
     hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
+
+    -- Update AntiFall to underground
+    bp.Position = Vector3.new(savedCF.X, savedCF.Y, savedCF.Z)
+
+    hum.PlatformStand = true
 end
 
 -- ═══════════════════════════════════════
@@ -489,7 +507,7 @@ local function handle50Coins()
 end
 
 -- ═══════════════════════════════════════
--- FARM LOOP
+-- FARM LOOP (FIXED - no fall, no death)
 -- ═══════════════════════════════════════
 RunService.Heartbeat:Connect(function()
     pcall(function()
@@ -499,6 +517,27 @@ RunService.Heartbeat:Connect(function()
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         if not hrp or not hum or hum.Health <= 0 then return end
+
+        -- ✅ Disable fall state (prevent fall death)
+        hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+
+        -- ✅ Y SAFETY NET (before anything else)
+        if hrp.Position.Y < -400 then
+            hrp.CFrame = CFrame.new(hrp.Position.X, -8, hrp.Position.Z)
+            hrp.Velocity = Vector3.zero
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+            return
+        end
+
+        -- ✅ Kill downward velocity (prevent falling)
+        if hrp.AssemblyLinearVelocity.Y < -30 then
+            hrp.AssemblyLinearVelocity = Vector3.new(
+                hrp.AssemblyLinearVelocity.X,
+                0,
+                hrp.AssemblyLinearVelocity.Z
+            )
+        end
 
         -- Scanning
         if phase == "scanning" then
@@ -521,22 +560,32 @@ RunService.Heartbeat:Connect(function()
 
         if phase ~= "farming" then return end
 
-        -- Teleport first coin
+        -- Teleport first
         if not firstTeleportDone then
             local firstCoin = getNearestCoin()
             if firstCoin then
                 hum.PlatformStand = true
                 hum.WalkSpeed = 0
-                hum.JumpPower = 0
                 pcall(function() hum:ChangeState(Enum.HumanoidStateType.Physics) end)
                 for _, part in ipairs(char:GetDescendants()) do
                     if part:IsA("BasePart") then part.CanCollide = false end
                 end
-
                 local targetPos = firstCoin.Position + Vector3.new(0, -UNDER_OFFSET, 0)
                 hrp.CFrame = CFrame.new(targetPos)
                 hrp.Velocity = Vector3.zero
                 hrp.AssemblyLinearVelocity = Vector3.zero
+
+                -- Add AntiFall at underground position
+                local oldBP = hrp:FindFirstChild("AntiFall")
+                if oldBP then oldBP:Destroy() end
+                local bp = Instance.new("BodyPosition")
+                bp.Name = "AntiFall"
+                bp.MaxForce = Vector3.new(0, math.huge, 0)
+                bp.P = 100000
+                bp.D = 1000
+                bp.Position = targetPos
+                bp.Parent = hrp
+
                 currentCoin = firstCoin
                 coinStartTime = tick()
                 firstTeleportDone = true
@@ -588,7 +637,6 @@ RunService.Heartbeat:Connect(function()
         hum.PlatformStand = true
         hum.WalkSpeed = 0
         hum.JumpPower = 0
-        hum.JumpHeight = 0
         hum.AutoRotate = false
         pcall(function() hum:ChangeState(Enum.HumanoidStateType.Physics) end)
 
@@ -611,14 +659,14 @@ RunService.Heartbeat:Connect(function()
             end
         end
 
-        -- ═══ COLLECT (locked, async) ═══
+        -- Collect
         if tick() - lastCollectTime > COLLECT_INTERVAL and not isCollecting then
             lastCollectTime = tick()
             isCollecting = true
             task.spawn(function()
                 local nearby = getCoinsInRange(hrp.Position, COLLECT_RANGE, COLLECT_PER_BATCH)
                 for _, coin in ipairs(nearby) do
-                    collectCoin(coin, char, hrp)
+                    collectCoin(coin, char, hrp, hum)
                     coinAttempts[coin] = (coinAttempts[coin] or 0) + 1
                     if coinAttempts[coin] > 15 then
                         stuckCoins[coin] = true
@@ -628,10 +676,9 @@ RunService.Heartbeat:Connect(function()
             end)
         end
 
-        -- ✅ لا تحرك أثناء الجمع
         if isCollecting then return end
 
-        -- Fly to nearest coin (underground)
+        -- Fly to nearest coin
         local target = currentCoin
         if escapeTarget and tick() < escapeUntil then
             target = escapeTarget
@@ -657,14 +704,15 @@ RunService.Heartbeat:Connect(function()
             end
         end
 
+        -- Update AntiFall Y
+        local bp = hrp:FindFirstChild("AntiFall")
+        if bp then
+            bp.Position = Vector3.new(hrp.Position.X, targetPos.Y, hrp.Position.Z)
+        end
+
         hrp.Velocity = Vector3.zero
         hrp.AssemblyLinearVelocity = Vector3.zero
         hrp.RotVelocity = Vector3.zero
-
-        if hrp.Position.Y < -450 then
-            hrp.CFrame = CFrame.new(target.Position.X, -100, target.Position.Z)
-            hrp.Velocity = Vector3.zero
-        end
 
         if tick() - coinStartTime > 3 then
             stuckCoins[target] = true
@@ -937,6 +985,11 @@ local FarmBtn = makeToggle(56, "طيران تحت الأرض + جمع", "🚇", 
         phase = "idle"
         local char = LocalPlayer.Character
         if char then
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local bp = hrp:FindFirstChild("AntiFall")
+                if bp then bp:Destroy() end
+            end
             local hum = char:FindFirstChildOfClass("Humanoid")
             if hum then
                 hum.PlatformStand = false
@@ -1084,12 +1137,18 @@ LocalPlayer.CharacterAdded:Connect(function(char)
     escapeTarget = nil
     firstTeleportDone = false
     isCollecting = false
+    -- ✅ Disable fall state
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if hum then
+        pcall(function()
+            hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+        end)
+    end
     if farmActive then
         phase = "scanning"
         scanStart = tick()
     end
-    if not farmActive then
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum then hum.WalkSpeed = 16 end
+    if not farmActive and hum then
+        hum.WalkSpeed = 16
     end
 end)
