@@ -1,10 +1,10 @@
 --[[
-    عمو تشريب Hub - Mobile v62 CONTINUOUS FARM & AUTO-SKIP STUCK
+    عمو تشريب Hub - Mobile v63 INSTANT CONTINUOUS FARM (NO DELAY)
     ================================================================
     - Strict Underground Farming (8 Studs) - Zero Teleport
-    - Calibrated Speed: Exactly 26
-    - Continuous Fast Collection (Seamless next-coin targeting)
-    - Anti-Stuck Auto-Skip System (Skips non-collectable coins)
+    - Calibrated Speed: 26
+    - NO DELAY / NO 6-SECOND PAUSE (Instant Coin-to-Coin targeting)
+    - Ultra-fast Anti-Stuck Auto-Skip (0.3s timeout)
     - Live Coin Counter (Max 50) + Custom Icon
 --]]
 
@@ -18,7 +18,7 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 
 -- CONFIGURATION
-local FARM_SPEED = 26 -- سرعة التجميع المضبوطة
+local FARM_SPEED = 26
 local UNDER_OFFSET = 8
 local COIN_MAX_LIMIT = 50
 
@@ -29,7 +29,6 @@ local antiAFKActive = true
 
 local collectedCoinsCount = 0
 local coinsCache = {}
-local lastCacheUpdate = 0
 
 -- ANTI-STUCK SYSTEM VARIABLES
 local currentTargetCoin = nil
@@ -49,12 +48,9 @@ task.spawn(function()
     end
 end)
 
--- GET ACTIVE ROUND COINS (Excluding Blacklisted Stuck Coins)
+-- INSTANT GET ACTIVE ROUND COINS
 local function getCoins()
-    if tick() - lastCacheUpdate < 0.15 then return coinsCache end
-    lastCacheUpdate = tick()
     coinsCache = {}
-    
     pcall(function()
         for _, map in ipairs(workspace:GetChildren()) do
             if map.Name ~= "Lobby" then
@@ -132,7 +128,7 @@ LocalPlayer.CharacterAdded:Connect(function()
     blacklistedCoins = {}
 end)
 
--- TRIGGER CONTINUOUS TOUCH INTEREST
+-- TRIGGER INSTANT TOUCH INTEREST
 local function triggerUndergroundTouch(coin, char, hrp)
     if not coin or not coin.Parent or not hrp then return end
     
@@ -149,14 +145,14 @@ local function triggerUndergroundTouch(coin, char, hrp)
     end)
 end
 
--- MAIN SMART FARM LOOP (STRICT SPEED 26 & AUTO SKIP STUCK COINS)
+-- MAIN FARM LOOP (NO DELAY / SPEED 26)
 RunService.Heartbeat:Connect(function(dt)
     pcall(function()
         if not farmActive then return end
 
         local char = LocalPlayer.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        local hum = char:FindFirstChildOfClass("Humanoid")
         if not hrp or not hum or hum.Health <= 0 then return end
 
         local allCoins = getCoins()
@@ -178,25 +174,24 @@ RunService.Heartbeat:Connect(function(dt)
 
         local coin = getNearestCoin()
         if coin then
-            -- إدارة وتحديد العملة الحالية مع مؤقت الذكاء
+            -- إدارة العملات وتخطي أسرع لـ المعلقة (0.3 ثانية فقط بدلاً من التوقف)
             if coin ~= currentTargetCoin then
                 currentTargetCoin = coin
                 coinTargetStartTime = tick()
             else
-                -- إذا استغرق عند نفس العملة أكثر من 1.2 ثانية دون أن تتلاشى -> تخطَّها فوراً!
-                if tick() - coinTargetStartTime > 1.2 then
+                if tick() - coinTargetStartTime > 0.3 then
                     blacklistedCoins[coin] = true
                     currentTargetCoin = nil
                     return
                 end
             end
 
-            -- الحركة المستمرة السرعة 26 تحت الأرض بـ 8 ستود
+            -- حركة فائقة السرعة والسلاسة دون توقف
             local targetPos = Vector3.new(coin.Position.X, coin.Position.Y - UNDER_OFFSET, coin.Position.Z)
             local delta = targetPos - hrp.Position
             local moveStep = math.min(delta.Magnitude, FARM_SPEED * dt * 2)
             
-            if delta.Magnitude > 0.1 then
+            if delta.Magnitude > 0.05 then
                 hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * moveStep)
             else
                 hrp.CFrame = CFrame.new(targetPos)
@@ -205,7 +200,7 @@ RunService.Heartbeat:Connect(function(dt)
             hrp.AssemblyLinearVelocity = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
 
-            -- لمس مستمر وسريع جداً
+            -- لمس سريع ومباشر
             triggerUndergroundTouch(coin, char, hrp)
         end
     end)
@@ -213,7 +208,7 @@ end)
 
 -- UI INTERFACE SETUP
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AmoChereebUltimateV62"
+ScreenGui.Name = "AmoChereebUltimateV63"
 ScreenGui.Parent = CoreGui
 ScreenGui.ResetOnSpawn = false
 
@@ -260,7 +255,7 @@ local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(1, -50, 1, 0)
 TitleText.Position = UDim2.new(0, 15, 0, 0)
 TitleText.BackgroundTransparency = 1
-TitleText.Text = "⚡ عمو تشريب Hub - v62"
+TitleText.Text = "⚡ عمو تشريب Hub - v63"
 TitleText.TextColor3 = Color3.fromRGB(255, 170, 0)
 TitleText.Font = Enum.Font.GothamBold
 TitleText.TextSize = 15
@@ -314,9 +309,9 @@ task.spawn(function()
             local count = math.min(collectedCoinsCount, COIN_MAX_LIMIT)
             CoinLabel.Text = "العملات المجمعة: " .. tostring(count) .. " / " .. tostring(COIN_MAX_LIMIT) .. " 🪙"
             local percent = math.clamp(count / COIN_MAX_LIMIT, 0, 1)
-            TweenService:Create(ProgressBarFill, TweenInfo.new(0.3), {Size = UDim2.new(percent, 0, 1, 0)}):Play()
+            TweenService:Create(ProgressBarFill, TweenInfo.new(0.2), {Size = UDim2.new(percent, 0, 1, 0)}):Play()
         end)
-        task.wait(0.3)
+        task.wait(0.2)
     end
 end)
 
@@ -363,7 +358,7 @@ local function createToggle(yPos, text, icon, default, callback)
     end)
 end
 
-createToggle(0, "تجميع العملات تحت الأرض (سرعة 26)", "🪙", false, function(st)
+createToggle(0, "تجميع سريع بدون توقف", "🪙", false, function(st)
     farmActive = st
     if not st then
         cleanupPhysics()
