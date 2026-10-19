@@ -1,16 +1,16 @@
 --[[
-    عمو تشريب Hub - Mobile v73.2 - FIXED FINAL VERSION
-    ==================================================
-    - Fixed UI responsiveness and touch detection (PlayerGui)
-    - Strict Real-Time Validity & Transparency Check (No Ghost/Fake Coins)
-    - Underground Farm (8 Studs) at EXACT Speed 30
-    - Auto Character Reset when Coins Reach Max (50)
+    عمو تشريب Hub - Mobile v76 - ULTIMATE FLY & COLLECTION FIX
+    ==========================================================
+    - Fixed coin scanner to scan all workspace descendants (Global Find)
+    - Real underground flight & smooth movement at speed 30
+    - Auto Character Reset at Max 50 Coins
 --]]
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local VirtualUser = game:GetService("VirtualUser")
+local CoreGui = game:GetService("CoreGui")
 
 if not game:IsLoaded() then
     game.Loaded:Wait()
@@ -90,7 +90,7 @@ local function getGameCoinCount()
     return success and result or 0
 end
 
--- ULTRA STRICT REAL & EXISTING COIN CHECK (معالجة مشكلة الكوينز الوهمية)
+-- ULTRA ROBUST COIN SCAN (فحص شامل لجميع الكوينز في الخريطة بغض النظر عن اسم المجلد)
 local function isRealAndExistingCoin(part)
     if not part or not part:IsA("BasePart") then
         return false
@@ -109,13 +109,11 @@ local function isRealAndExistingCoin(part)
         return false
     end
 
+    local name = (part.Name or ""):lower()
     local parent = part.Parent
-    if not parent then
-        return false
-    end
+    local parentName = parent and parent.Name:lower() or ""
 
-    local parentName = parent.Name:lower()
-    if parentName:find("coincontainer") or parentName:find("coins") or part.Name:lower():find("coin") then
+    if name:find("coin") or parentName:find("coin") or parentName:find("coins") or parentName:find("container") then
         return true
     end
 
@@ -133,18 +131,22 @@ local function getValidCoins()
     local seen = {}
 
     pcall(function()
-        for _, map in ipairs(workspace:GetChildren()) do
-            if map and map.Name ~= "Lobby" then
-                local container = map:FindFirstChild("CoinContainer") or map:FindFirstChild("Coins")
-                if container then
-                    for _, child in ipairs(container:GetDescendants()) do
-                        if child and child:IsA("BasePart") then
-                            if not seen[child] and not blacklistedCoins[child] and isRealAndExistingCoin(child) then
-                                table.insert(coinsCache, child)
-                                seen[child] = true
-                            end
-                        end
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj and obj:IsA("BasePart") and not seen[obj] and not blacklistedCoins[obj] then
+                -- استبعاد اللوبي تماماً
+                local isInLobby = false
+                local p = obj.Parent
+                while p and p ~= workspace do
+                    if p.Name:lower():find("lobby") then
+                        isInLobby = true
+                        break
                     end
+                    p = p.Parent
+                end
+
+                if not isInLobby and isRealAndExistingCoin(obj) then
+                    table.insert(coinsCache, obj)
+                    seen[obj] = true
                 end
             end
         end
@@ -226,7 +228,7 @@ local function triggerUndergroundTouch(coin, char, hrp)
     end)
 end
 
--- FARM LOOP
+-- FARM & FLY LOOP
 RunService.Heartbeat:Connect(function(dt)
     pcall(function()
         if not farmActive then return end
@@ -289,6 +291,7 @@ RunService.Heartbeat:Connect(function(dt)
                 end
             end
 
+            -- الطيران والتحليق تحت الأرض بمسافة 8 ستود وبسرعة 30
             local targetPos = Vector3.new(coin.Position.X, coin.Position.Y - UNDER_OFFSET, coin.Position.Z)
             local delta = targetPos - hrp.Position
             local moveStep = math.min(delta.Magnitude, FARM_SPEED * dt)
@@ -307,9 +310,9 @@ RunService.Heartbeat:Connect(function(dt)
     end)
 end)
 
--- UI SETUP (Fixed to PlayerGui so clicks register properly)
+-- UI SETUP
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AmoChereebUltimateV73"
+ScreenGui.Name = "AmoChereebUltimateV76"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.IgnoreGuiInset = true
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
@@ -358,7 +361,7 @@ local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(1, -50, 1, 0)
 TitleText.Position = UDim2.new(0, 15, 0, 0)
 TitleText.BackgroundTransparency = 1
-TitleText.Text = "⚡ عمو تشريب Hub - v73"
+TitleText.Text = "⚡ عمو تشريب Hub - v76"
 TitleText.TextColor3 = Color3.fromRGB(255, 170, 0)
 TitleText.Font = Enum.Font.GothamBold
 TitleText.TextSize = 15
