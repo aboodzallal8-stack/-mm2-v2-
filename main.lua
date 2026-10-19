@@ -1,10 +1,9 @@
 --[[
-    عمو تشريب Hub - Mobile v69 ULTIMATE STABLE & FIXED
-    ===================================================
-    - Full Pcall Protection (Guaranteed not to crash or stop)
-    - Strict Underground Farming (8 Studs) at EXACT Speed 30
-    - Safe Coin Detection & Anti-Kick System
-    - Live Coin Counter (Max 50) + Custom User Icon
+    عمو تشريب Hub - Mobile v70 FINAL ROBUST FIX
+    ============================================
+    - Full Clean & Fixed Execution Structure
+    - Underground Farm (8 Studs) at Speed 30
+    - Realtime Coin Counter (Max 50) & Custom Icon
 --]]
 
 local Players = game:GetService("Players")
@@ -17,7 +16,7 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 
 -- CONFIGURATION
-local FARM_SPEED = 30 
+local FARM_SPEED = 30
 local UNDER_OFFSET = 8
 local COIN_MAX_LIMIT = 50
 
@@ -29,7 +28,6 @@ local antiAFKActive = true
 local collectedCoinsCount = 0
 local coinsCache = {}
 local lastCacheUpdate = 0
-
 local currentTargetCoin = nil
 local coinTargetStartTime = 0
 local blacklistedCoins = {}
@@ -47,9 +45,9 @@ task.spawn(function()
     end
 end)
 
--- SAFE COIN FINDER WITH ROBUST ERROR HANDLING
+-- SAFE COIN FINDER
 local function getValidCoins()
-    if tick() - lastCacheUpdate < 0.15 then return coinsCache end
+    if tick() - lastCacheUpdate < 0.2 then return coinsCache end
     lastCacheUpdate = tick()
     coinsCache = {}
     
@@ -58,9 +56,7 @@ local function getValidCoins()
             if map and map.Name ~= "Lobby" then
                 local container = map:FindFirstChild("CoinContainer") or map:FindFirstChild("Coins")
                 if container then
-                    local children = container:GetChildren()
-                    for i = 1, #children do
-                        local coin = children[i]
+                    for _, coin in ipairs(container:GetChildren()) do
                         if coin and coin:IsA("BasePart") and coin.Parent and not blacklistedCoins[coin] then
                             table.insert(coinsCache, coin)
                         end
@@ -153,7 +149,7 @@ local function triggerUndergroundTouch(coin, char, hrp)
     end)
 end
 
--- MAIN FARM LOOP WITH FULL PCALL SAFETY
+-- MAIN FARM LOOP
 RunService.Heartbeat:Connect(function(dt)
     pcall(function()
         if not farmActive then return end
@@ -213,7 +209,7 @@ end)
 
 -- UI INTERFACE SETUP
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AmoChereebUltimateV69"
+ScreenGui.Name = "AmoChereebUltimateV70"
 ScreenGui.Parent = CoreGui
 ScreenGui.ResetOnSpawn = false
 
@@ -260,7 +256,7 @@ local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(1, -50, 1, 0)
 TitleText.Position = UDim2.new(0, 15, 0, 0)
 TitleText.BackgroundTransparency = 1
-TitleText.Text = "⚡ عمو تشريب Hub - v69"
+TitleText.Text = "⚡ عمو تشريب Hub - v70"
 TitleText.TextColor3 = Color3.fromRGB(255, 170, 0)
 TitleText.Font = Enum.Font.GothamBold
 TitleText.TextSize = 15
@@ -363,7 +359,7 @@ local function createToggle(yPos, text, icon, default, callback)
     end)
 end
 
-createToggle(0, "تغيل التجميع المستقر (v69)", "🪙", false, function(st)
+createToggle(0, "تجميع تحت الأرض (سرعة 30)", "🪙", false, function(st)
     farmActive = st
     if not st then
         cleanupPhysics()
