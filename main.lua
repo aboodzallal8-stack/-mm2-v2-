@@ -1,9 +1,10 @@
 --[[
-    عمو تشريب Hub - Mobile v48 SMART
-    =================================
-    - Smart scan at start (role + murderer + 50 check)
-    - No teleport (BodyVelocity smooth movement)
-    - Underground 8 studs + BodyPosition Y lock
+    عمو تشريب Hub - Mobile v49 FAKE-CHAR
+    ======================================
+    - Smart scan 3s (role + murderer + 50 + coins)
+    - ONE teleport at round start to first coin
+    - Then underground 8 studs (smooth BV, no teleport)
+    - FakeChar (golden block) collects coins for real
     - Speed 27
 --]]
 
@@ -21,9 +22,8 @@ local LocalPlayer = Players.LocalPlayer
 -- ═══════════════════════════════════════
 local FLY_SPEED = 27
 local UNDER_OFFSET = 8
-local COLLECT_RANGE = 40
-local COLLECT_INTERVAL = 0.4
-local COLLECT_PER_BATCH = 3
+local COLLECT_RANGE = 30
+local COLLECT_INTERVAL = 0.3
 local DANGER_DIST = 12
 local COIN_LIMIT = 50
 local FARM_MIN_TIME = 15
@@ -47,13 +47,12 @@ local coinStartTime = 0
 local lastCollectTime = 0
 local sheriffKillInProgress = false
 local activelyFlinging = {}
-local isCollecting = false
 
--- ✅ SMART SCAN STATES
-local scanStage = "idle"       -- idle / scanning / lobby / farming
+-- ✅ STAGE MACHINE
+local stage = "idle"        -- idle / scanning / lobby / init / farming
 local scanStart = 0
-local scannedRole = "unknown"  -- murderer / sheriff / zombie / innocent
-local scannedCoins = 0
+local scannedRole = "unknown"
+local fakeChar = nil
 
 -- ═══════════════════════════════════════
 -- ANTI-AFK
@@ -106,15 +105,6 @@ local function isLocalZombie()
         if r and tostring(r):lower():find("zombie") then return true end
     end
     if LocalPlayer.Team and LocalPlayer.Team.Name:lower():find("zombie") then return true end
-    local bp = LocalPlayer:FindFirstChild("Backpack")
-    if bp then
-        for _, tool in ipairs(bp:GetChildren()) do
-            if tool:IsA("Tool") then
-                local tn = tool.Name:lower()
-                if tn:find("zombie") or tn:find("infect") or tn:find("claw") then return true end
-            end
-        end
-    end
     return false
 end
 
@@ -166,7 +156,6 @@ local function countZombies()
     return c
 end
 
--- Background murderer scan
 task.spawn(function()
     while true do
         task.wait(0.3)
@@ -331,23 +320,6 @@ local function getNearestCoin()
     return closest
 end
 
-local function getCoinsInRange(pos, radius, maxCount)
-    local coins = getAllCoins()
-    local list = {}
-    for _, coin in ipairs(coins) do
-        local d = (coin.Position - pos).Magnitude
-        if d < radius then
-            table.insert(list, {coin = coin, dist = d})
-        end
-    end
-    table.sort(list, function(a, b) return a.dist < b.dist end)
-    local result = {}
-    for i = 1, math.min(maxCount, #list) do
-        table.insert(result, list[i].coin)
-    end
-    return result
-end
-
 local function getUICoinCount()
     local mainGui = LocalPlayer.PlayerGui:FindFirstChild("MainGUI")
     if not mainGui then return 0, 0 end
@@ -368,14 +340,14 @@ local function getUICoinCount()
 end
 
 -- ═══════════════════════════════════════
--- ✅ MOVEMENT (BodyVelocity - smooth, no teleport)
+-- BODY MOVERS (BV for XZ, BP for Y)
 -- ═══════════════════════════════════════
 local function ensureBV(hrp)
     local bv = hrp:FindFirstChild("MoveBV")
     if not bv then
         bv = Instance.new("BodyVelocity")
         bv.Name = "MoveBV"
-        bv.MaxForce = Vector3.new(math.huge, 0, math.huge)  -- XZ only
+        bv.MaxForce = Vector3.new(math.huge, 0, math.huge)
         bv.P = 10000
         bv.Parent = hrp
     end
@@ -387,7 +359,7 @@ local function ensureBP(hrp, yTarget)
     if not bp then
         bp = Instance.new("BodyPosition")
         bp.Name = "AntiFall"
-        bp.MaxForce = Vector3.new(0, math.huge, 0)  -- Y only
+        bp.MaxForce = Vector3.new(0, math.huge, 0)
         bp.P = 50000
         bp.D = 500
         bp.Parent = hrp
@@ -396,93 +368,90 @@ local function ensureBP(hrp, yTarget)
     return bp
 end
 
-local function moveToward(hrp, targetPos, speed)
+local function removeBodyMovers(hrp)
+    if not hrp then return end
+    for _, name in ipairs({"MoveBV", "AntiFall"}) do
+        local m = hrp:FindFirstChild(name)
+        if m then m:Destroy() end
+    end
+end
+
+local function moveToward(hrp, targetXZ, speed)
     local bv = ensureBV(hrp)
-    local delta = targetPos - hrp.Position
+    local delta = Vector3.new(targetXZ.X - hrp.Position.X, 0, targetXZ.Z - hrp.Position.Z)
     local dist = delta.Magnitude
-    if dist < 1 then
+    if dist < 1.5 then
         bv.Velocity = Vector3.zero
         return true
     end
-    local horizDelta = Vector3.new(delta.X, 0, delta.Z)
-    if horizDelta.Magnitude < 0.5 then
-        bv.Velocity = Vector3.zero
-        return true
-    end
-    bv.Velocity = horizDelta.Unit * math.min(speed, horizDelta.Magnitude * 3)
+    bv.Velocity = delta.Unit * math.min(speed, dist * 4)
     return false
 end
 
 -- ═══════════════════════════════════════
--- ✅ COLLECT (BodyPosition rise + BV touch + BP descend)
+-- ✅ FAKE CHARACTER (real collection from coin)
 -- ═══════════════════════════════════════
-local function collectCoin(coin, char, hrp, hum)
-    if not coin or not coin:IsDescendantOf(workspace) then return end
-    
-    local bv = ensureBV(hrp)
-    local bp = ensureBP(hrp, coin.Position.Y + 0.5)  -- Rise target
-    
-    -- Rise up
-    local start = tick()
-    while tick() - start < 0.2 do
-        if (hrp.Position - coin.Position).Magnitude < 3.5 then break end
-        RunService.Heartbeat:Wait()
+local function ensureFakeChar(char)
+    if fakeChar and fakeChar.Parent then return fakeChar end
+    fakeChar = Instance.new("Part")
+    fakeChar.Name = "FakeCollector"
+    fakeChar.Size = Vector3.new(2.5, 2.5, 1)
+    fakeChar.CanCollide = false
+    fakeChar.CanTouch = true
+    fakeChar.CanQuery = true
+    fakeChar.Anchored = true
+    fakeChar.Massless = true
+    fakeChar.Transparency = 0.6
+    fakeChar.Color = Color3.fromRGB(212, 175, 55)
+    fakeChar.Material = Enum.Material.Neon
+    fakeChar.Parent = char
+    return fakeChar
+end
+
+local function removeFakeChar()
+    if fakeChar and fakeChar.Parent then
+        fakeChar:Destroy()
     end
+    fakeChar = nil
+end
+
+local function collectWithFake(coin, char, hrp)
+    if not coin or not coin:IsDescendantOf(workspace) then return end
+    if not char or not hrp then return end
     
-    -- Touch from all parts
-    for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA("BasePart") then
+    local fake = ensureFakeChar(char)
+    if not fake then return end
+    
+    -- Move fake to coin
+    fake.CFrame = coin.CFrame
+    
+    -- Wait one frame for registration
+    RunService.Heartbeat:Wait()
+    
+    -- Fire touch from fake
+    pcall(function()
+        firetouchinterest(fake, coin, 0)
+        firetouchinterest(fake, coin, 1)
+    end)
+    
+    -- Also from HRP (server may check player)
+    pcall(function()
+        firetouchinterest(hrp, coin, 0)
+        firetouchinterest(hrp, coin, 1)
+    end)
+    
+    -- Also from all body parts
+    for _, p in ipairs(char:GetDescendants()) do
+        if p:IsA("BasePart") and p ~= fake and p ~= hrp then
             pcall(function()
-                firetouchinterest(part, coin, 0)
-                firetouchinterest(part, coin, 1)
+                firetouchinterest(p, coin, 0)
+                firetouchinterest(p, coin, 1)
             end)
         end
     end
+    
+    -- Wait for server
     RunService.Heartbeat:Wait()
-    
-    -- Descend back
-    bp.Position = Vector3.new(hrp.Position.X, coin.Position.Y - UNDER_OFFSET, hrp.Position.Z)
-    start = tick()
-    while tick() - start < 0.2 do
-        if math.abs(hrp.Position.Y - (coin.Position.Y - UNDER_OFFSET)) < 2 then break end
-        RunService.Heartbeat:Wait()
-    end
-end
-
--- ═══════════════════════════════════════
--- ✅ SMART SCAN (roles + murderer + 50 check)
--- ═══════════════════════════════════════
-local function doSmartScan()
-    scanStage = "scanning"
-    scanStart = tick()
-    print("[SCAN] Starting smart scan...")
-    
-    -- Determine own role
-    if isLocalMurderer() then
-        scannedRole = "murderer"
-    elseif isLocalSheriff() then
-        scannedRole = "sheriff"
-    elseif isLocalZombie() then
-        scannedRole = "zombie"
-    else
-        scannedRole = "innocent"
-    end
-    
-    -- Detect murderer in game
-    cachedMurderer = nil
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and isPlayerMurderer(p) then
-            cachedMurderer = p
-            break
-        end
-    end
-    
-    -- Count coins
-    scannedCoins = #getAllCoins()
-    
-    -- Check 50
-    local cur, mx = getUICoinCount()
-    print("[SCAN] Role:", scannedRole, "| Murderer:", cachedMurderer and cachedMurderer.Name or "None", "| Coins:", scannedCoins, "| Bag:", cur .. "/" .. mx)
 end
 
 -- ═══════════════════════════════════════
@@ -493,10 +462,10 @@ local function handle50Coins()
     if tick() - lastResetTime < 5 then return end
     pendingRespawn = true
     lastResetTime = tick()
-    print("[50] Action for role:", scannedRole)
 
     local char = LocalPlayer.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
 
     if scannedRole == "zombie" and smartAllActive then
         for i = 1, 80 do killAll(isPlayerZombie); task.wait(0.05) end
@@ -504,19 +473,18 @@ local function handle50Coins()
         for i = 1, 80 do killAll(nil); task.wait(0.05) end
     elseif scannedRole == "sheriff" and smartAllActive then
         if countMurderers() >= 2 or countZombies() > 0 then
-            killNearestEnemy()
+            killNearestKill()
         end
     end
+
+    if hrp then removeBodyMovers(hrp) end
+    removeFakeChar()
 
     if char then
         if hum then hum.PlatformStand = false; hum.WalkSpeed = 16 end
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") then part.CanCollide = true end
         end
-        local bp = char.HumanoidRootPart:FindFirstChild("AntiFall")
-        if bp then bp:Destroy() end
-        local bv = char.HumanoidRootPart:FindFirstChild("MoveBV")
-        if bv then bv:Destroy() end
     end
     if hum and hum.Health > 0 then pcall(function() hum.Health = 0 end) end
     task.wait(3)
@@ -524,12 +492,34 @@ local function handle50Coins()
     stuckCoins = {}
     currentCoin = nil
     lastCoinCount = 0
-    isCollecting = false
-    scanStage = "idle"
+    stage = "idle"
 end
 
 -- ═══════════════════════════════════════
--- MAIN FARM LOOP
+-- SMART SCAN
+-- ═══════════════════════════════════════
+local function doSmartScan()
+    stage = "scanning"
+    scanStart = tick()
+    
+    -- Determine role
+    if isLocalMurderer() then scannedRole = "murderer"
+    elseif isLocalSheriff() then scannedRole = "sheriff"
+    elseif isLocalZombie() then scannedRole = "zombie"
+    else scannedRole = "innocent" end
+    
+    -- Find murderer
+    cachedMurderer = nil
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and isPlayerMurderer(p) then
+            cachedMurderer = p
+            break
+        end
+    end
+end
+
+-- ═══════════════════════════════════════
+-- MAIN LOOP
 -- ═══════════════════════════════════════
 RunService.Heartbeat:Connect(function()
     pcall(function()
@@ -542,63 +532,88 @@ RunService.Heartbeat:Connect(function()
 
         hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
 
-        -- ═══ SCAN STAGE ═══
-        if scanStage == "scanning" then
+        -- ═══ SCANNING STAGE ═══
+        if stage == "scanning" then
             if tick() - scanStart < SCAN_DURATION then
-                return  -- Still scanning
+                return
             end
-            -- Scan done, decide next stage
+            -- Scan complete
             local cur, mx = getUICoinCount()
             if mx >= 40 and cur >= mx then
                 handle50Coins()
                 return
             end
-            if scannedCoins == 0 then
-                scanStage = "lobby"
-                print("[SCAN] In lobby, waiting for round...")
+            if #getAllCoins() == 0 then
+                stage = "lobby"
             else
-                scanStage = "farming"
-                print("[SCAN] Starting farm")
-                farmStartedAt = tick()
-                lastCoinCount = 0
+                stage = "init"
             end
             return
         end
 
-        -- ═══ LOBBY STAGE (no coins) ═══
-        if scanStage == "lobby" then
-            local allCoins = getAllCoins()
-            if #allCoins > 0 then
-                -- Round started!
-                scanStage = "farming"
-                farmStartedAt = tick()
-                lastCoinCount = 0
-                print("[LOBBY] Round started, farming...")
-            else
-                -- Still in lobby - keep flinging murderer
-                if cachedMurderer and cachedMurderer.Character 
-                   and not activelyFlinging[tostring(cachedMurderer.UserId)] then
-                    flingPlayer(cachedMurderer)
+        -- ═══ LOBBY STAGE ═══
+        if stage == "lobby" then
+            -- Reset to normal if still in lobby
+            hum.PlatformStand = false
+            hum.WalkSpeed = 16
+            
+            -- Check for round start
+            if #getAllCoins() > 0 then
+                stage = "init"
+                print("[LOBBY] Round started")
+            end
+            
+            -- Fling murderer in lobby too
+            if cachedMurderer and cachedMurderer.Character 
+               and not activelyFlinging[tostring(cachedMurderer.UserId)] then
+                flingPlayer(cachedMurderer)
+            end
+            return
+        end
+
+        -- ═══ INIT STAGE (one teleport) ═══
+        if stage == "init" then
+            local firstCoin = getNearestCoin()
+            if firstCoin then
+                hum.PlatformStand = true
+                hum.WalkSpeed = 0
+                hum.JumpPower = 0
+                hum.AutoRotate = false
+                
+                -- Noclip
+                for _, part in ipairs(char:GetDescendants()) do
+                    if part:IsA("BasePart") then part.CanCollide = false end
                 end
+                
+                -- ✅ ONE teleport to first coin underground
+                local target = Vector3.new(firstCoin.Position.X, firstCoin.Position.Y - UNDER_OFFSET, firstCoin.Position.Z)
+                hrp.CFrame = CFrame.new(target)
+                hrp.Velocity = Vector3.zero
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                hrp.AssemblyAngularVelocity = Vector3.zero
+                
+                -- Setup movers
+                ensureBV(hrp)
+                ensureBP(hrp, target.Y)
+                
+                currentCoin = firstCoin
+                coinStartTime = tick()
+                farmStartedAt = tick()
+                lastCoinCount = #getAllCoins()
+                stage = "farming"
+                print("[INIT] Teleported to first coin")
             end
             return
         end
 
         -- ═══ FARMING STAGE ═══
-        if scanStage ~= "farming" then return end
+        if stage ~= "farming" then return end
 
         local allCoins = getAllCoins()
         if #allCoins == 0 then
-            scanStage = "lobby"
+            stage = "lobby"
             return
         end
-
-        if lastCoinCount == 0 and #allCoins > 5 then
-            farmStartedAt = tick()
-            stuckCoins = {}
-            currentCoin = nil
-        end
-        lastCoinCount = #allCoins
 
         -- 50 check
         local uiCur, uiMax = getUICoinCount()
@@ -607,11 +622,15 @@ RunService.Heartbeat:Connect(function()
             return
         end
 
-        -- Y safety net
+        -- Y safety
         if hrp.Position.Y < -400 then
-            hrp.CFrame = CFrame.new(hrp.Position.X, -8, hrp.Position.Z)
-            hrp.Velocity = Vector3.zero
-            hrp.AssemblyLinearVelocity = Vector3.zero
+            local firstCoin = getNearestCoin()
+            if firstCoin then
+                hrp.CFrame = CFrame.new(firstCoin.Position.X, firstCoin.Position.Y - UNDER_OFFSET, firstCoin.Position.Z)
+                hrp.Velocity = Vector3.zero
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                ensureBP(hrp, firstCoin.Position.Y - UNDER_OFFSET)
+            end
             return
         end
 
@@ -623,33 +642,30 @@ RunService.Heartbeat:Connect(function()
         hrp.AssemblyAngularVelocity = Vector3.zero
         hrp.RotVelocity = Vector3.zero
 
-        -- Noclip
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") then
                 if part.CanCollide then part.CanCollide = false end
             end
         end
 
-        -- ═══ Collect ═══
-        if tick() - lastCollectTime > COLLECT_INTERVAL and not isCollecting then
+        -- ═══ COLLECT with FakeChar ═══
+        if tick() - lastCollectTime > COLLECT_INTERVAL then
             lastCollectTime = tick()
-            isCollecting = true
-            task.spawn(function()
-                local nearby = getCoinsInRange(hrp.Position, COLLECT_RANGE, COLLECT_PER_BATCH)
-                for _, coin in ipairs(nearby) do
-                    collectCoin(coin, char, hrp, hum)
-                    local attempt = (attempt or 0) + 1
-                    if not stuckCoins[coin] then stuckCoins[coin] = 0 end
-                    stuckCoins[coin] = stuckCoins[coin] + 1
-                    if stuckCoins[coin] > 15 then stuckCoins[coin] = true end
+            local nearby = {}
+            for _, coin in ipairs(allCoins) do
+                if (coin.Position - hrp.Position).Magnitude < COLLECT_RANGE then
+                    table.insert(nearby, coin)
                 end
-                isCollecting = false
+            end
+            table.sort(nearby, function(a, b)
+                return (a.Position - hrp.Position).Magnitude < (b.Position - hrp.Position).Magnitude
             end)
+            for i = 1, math.min(2, #nearby) do
+                collectWithFake(nearby[i], char, hrp)
+            end
         end
 
-        if isCollecting then return end
-
-        -- ═══ Move to nearest coin (smooth BV) ═══
+        -- ═══ SMOOTH MOVE to nearest coin (underground) ═══
         local target = currentCoin
         if not target or not target:IsDescendantOf(workspace) then
             target = getNearestCoin()
@@ -659,14 +675,9 @@ RunService.Heartbeat:Connect(function()
         if not target then return end
         currentCoin = target
 
-        -- Underground target
-        local underPos = Vector3.new(target.Position.X, target.Position.Y - UNDER_OFFSET, target.Position.Z)
-        
-        -- BodyPosition locks Y underground
-        ensureBP(hrp, underPos.Y)
-        
-        -- BodyVelocity moves XZ
-        moveToward(hrp, underPos, FLY_SPEED)
+        local underY = target.Position.Y - UNDER_OFFSET
+        ensureBP(hrp, underY)
+        moveToward(hrp, target.Position, FLY_SPEED)
 
         if tick() - coinStartTime > 5 then
             stuckCoins[target] = true
@@ -867,30 +878,21 @@ local function makeToggle(yPos, text, icon, defaultState, callback)
     return btn
 end
 
-local FarmBtn = makeToggle(56, "ذكي: سكان + تحت الأرض + جمع", "🧠", false, function(state)
+local FarmBtn = makeToggle(56, "ذكي: سكان + تحت الأرض + FakeChar", "🧠", false, function(state)
     farmActive = state
     if state then
-        scanStage = "idle"
+        stage = "idle"
         stuckCoins = {}
         currentCoin = nil
-        farmStartedAt = tick()
-        lastCoinCount = 0
         lastCollectTime = 0
-        isCollecting = false
-        
-        -- ✅ Start smart scan
         doSmartScan()
     else
-        scanStage = "idle"
+        stage = "idle"
         local char = LocalPlayer.Character
         if char then
             local hrp = char:FindFirstChild("HumanoidRootPart")
-            if hrp then
-                local bp = hrp:FindFirstChild("AntiFall")
-                if bp then bp:Destroy() end
-                local bv = hrp:FindFirstChild("MoveBV")
-                if bv then bv:Destroy() end
-            end
+            removeBodyMovers(hrp)
+            removeFakeChar()
             local hum = char:FindFirstChildOfClass("Humanoid")
             if hum then
                 hum.PlatformStand = false
@@ -903,7 +905,6 @@ local FarmBtn = makeToggle(56, "ذكي: سكان + تحت الأرض + جمع", 
             end
         end
         currentCoin = nil
-        isCollecting = false
     end
 end)
 
@@ -1015,9 +1016,10 @@ local function updateCoinInfo()
     elseif scannedRole == "murderer" then roleTag = "🔪"
     end
     local stageTag = ""
-    if scanStage == "scanning" then stageTag = " 🔍"
-    elseif scanStage == "lobby" then stageTag = " 🏠"
-    elseif scanStage == "farming" then stageTag = " 🌾"
+    if stage == "scanning" then stageTag = " 🔍"
+    elseif stage == "lobby" then stageTag = " 🏠"
+    elseif stage == "init" then stageTag = " 📍"
+    elseif stage == "farming" then stageTag = " 🌾"
     end
     CoinInfo.Text = "🪙 " .. uiCur .. "/" .. (uiMax > 0 and uiMax or 50) .. " " .. roleTag .. stageTag .. "  •  خريطة:" .. mapCount
 end
@@ -1031,7 +1033,6 @@ LocalPlayer.CharacterAdded:Connect(function(char)
     currentCoin = nil
     sheriffKillInProgress = false
     activelyFlinging = {}
-    isCollecting = false
     local hum = char:FindFirstChildOfClass("Humanoid")
     if hum then
         pcall(function()
@@ -1039,7 +1040,8 @@ LocalPlayer.CharacterAdded:Connect(function(char)
         end)
     end
     if farmActive then
-        scanStage = "idle"
+        removeFakeChar()
+        stage = "idle"
         doSmartScan()
     end
 end)
