@@ -1,9 +1,9 @@
 --[[
-    عمو تشريب Hub - Mobile v70 FINAL ROBUST FIX
-    ============================================
-    - Works when LocalPlayer is not ready yet
-    - Searches all workspace coin parts instead of only CoinContainer/Coins
-    - More stable UI and farm logic
+    عمو تشريب Hub - Mobile v71 VALID COINS ONLY FIX
+    =================================================
+    - Strict Real Coin Filter (Only picks parts with actual TouchInterests)
+    - Fixed Fake/Non-existent parts collection bug
+    - Underground Farm (8 Studs) at Speed 30
 --]]
 
 local Players = game:GetService("Players")
@@ -62,16 +62,23 @@ task.spawn(function()
     end
 end)
 
--- SAFE COIN SCAN
-local function isCoinPart(part)
+-- SAFE & STRICT REAL COIN SCAN (فحص دقيق للعملات الحقيقية التي تملك خاصية اللمس فقط)
+local function isRealCoin(part)
     if not part or not part:IsA("BasePart") then
+        return false
+    end
+
+    -- التأكد أن القطعة تحتوي على خاصية اللمس الخاصة بالعملات الفاعلة
+    local hasTouch = part:FindFirstChild("TouchInterest") or part:FindFirstChildWhichIsA("TouchTransmitter")
+    if not hasTouch then
         return false
     end
 
     local name = (part.Name or ""):lower()
     local parentName = (part.Parent and part.Parent.Name or ""):lower()
 
-    if name:find("coin") or parentName:find("coin") then
+    -- التأكد من المجلدات الصحيحة أو اسم العملة الحقيقي
+    if parentName:find("coincontainer") or parentName:find("coins") or name:find("coin") then
         return true
     end
 
@@ -98,21 +105,14 @@ local function getValidCoins()
         if part.Parent and blacklistedCoins[part] then
             return
         end
-        if isCoinPart(part) then
+        if isRealCoin(part) then
             table.insert(coinsCache, part)
             seen[part] = true
         end
     end
 
-    -- Search all workspace descendants
+    -- البحث المخصص داخل حاويات العملات الرسمية فقط لضمان عدم التقاط أشياء وهمية
     pcall(function()
-        for _, obj in ipairs(workspace:GetDescendants()) do
-            if obj and obj:IsA("BasePart") then
-                addPart(obj)
-            end
-        end
-
-        -- Also scan known containers
         for _, map in ipairs(workspace:GetChildren()) do
             if map and map.Name ~= "Lobby" then
                 local container = map:FindFirstChild("CoinContainer") or map:FindFirstChild("Coins")
@@ -293,7 +293,7 @@ end)
 
 -- UI
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AmoChereebUltimateV70"
+ScreenGui.Name = "AmoChereebUltimateV71"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.IgnoreGuiInset = true
 safeParent(ScreenGui, CoreGui)
@@ -341,7 +341,7 @@ local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(1, -50, 1, 0)
 TitleText.Position = UDim2.new(0, 15, 0, 0)
 TitleText.BackgroundTransparency = 1
-TitleText.Text = "⚡ عمو تشريب Hub - v70"
+TitleText.Text = "⚡ عمو تشريب Hub - v71"
 TitleText.TextColor3 = Color3.fromRGB(255, 170, 0)
 TitleText.Font = Enum.Font.GothamBold
 TitleText.TextSize = 15
