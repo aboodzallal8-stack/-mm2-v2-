@@ -1,9 +1,10 @@
 --[[
-    عمو تشريب Hub - Mobile v61 STRICT UNDERGROUND (NO TELEPORT)
-    ============================================================
-    - 100% Underground Farming (8 Studs) - Zero Teleport
-    - Touch Radius Expansion (Collects coins directly above)
-    - Smooth Movement (Speed 26) & Anti-Fly / Anti-Lobby Fall
+    عمو تشريب Hub - Mobile v62 CONTINUOUS FARM & AUTO-SKIP STUCK
+    ================================================================
+    - Strict Underground Farming (8 Studs) - Zero Teleport
+    - Calibrated Speed: Exactly 26
+    - Continuous Fast Collection (Seamless next-coin targeting)
+    - Anti-Stuck Auto-Skip System (Skips non-collectable coins)
     - Live Coin Counter (Max 50) + Custom Icon
 --]]
 
@@ -17,7 +18,7 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 
 -- CONFIGURATION
-local FARM_SPEED = 26
+local FARM_SPEED = 26 -- سرعة التجميع المضبوطة
 local UNDER_OFFSET = 8
 local COIN_MAX_LIMIT = 50
 
@@ -29,7 +30,11 @@ local antiAFKActive = true
 local collectedCoinsCount = 0
 local coinsCache = {}
 local lastCacheUpdate = 0
-local lastTouchTick = 0
+
+-- ANTI-STUCK SYSTEM VARIABLES
+local currentTargetCoin = nil
+local coinTargetStartTime = 0
+local blacklistedCoins = {}
 
 -- ANTI-AFK SYSTEM
 task.spawn(function()
@@ -44,9 +49,9 @@ task.spawn(function()
     end
 end)
 
--- GET ACTIVE ROUND COINS
+-- GET ACTIVE ROUND COINS (Excluding Blacklisted Stuck Coins)
 local function getCoins()
-    if tick() - lastCacheUpdate < 0.2 then return coinsCache end
+    if tick() - lastCacheUpdate < 0.15 then return coinsCache end
     lastCacheUpdate = tick()
     coinsCache = {}
     
@@ -56,7 +61,7 @@ local function getCoins()
                 local container = map:FindFirstChild("CoinContainer") or map:FindFirstChild("Coins")
                 if container then
                     for _, coin in ipairs(container:GetChildren()) do
-                        if coin and coin:IsA("BasePart") and coin.Parent then
+                        if coin and coin:IsA("BasePart") and coin.Parent and not blacklistedCoins[coin] then
                             table.insert(coinsCache, coin)
                         end
                     end
@@ -124,14 +129,14 @@ end
 LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
     cleanupPhysics()
+    blacklistedCoins = {}
 end)
 
--- STRICT UNDERGROUND TOUCH TRIGGER (NO TELEPORT)
+-- TRIGGER CONTINUOUS TOUCH INTEREST
 local function triggerUndergroundTouch(coin, char, hrp)
     if not coin or not coin.Parent or not hrp then return end
     
     pcall(function()
-        -- إرسال إشارات اللمس بين جميع أجزاء الجسم والعملة مباشرة
         firetouchinterest(hrp, coin, 0)
         firetouchinterest(hrp, coin, 1)
         
@@ -144,8 +149,8 @@ local function triggerUndergroundTouch(coin, char, hrp)
     end)
 end
 
--- MAIN FARM LOOP (PURE UNDERGROUND)
-RunService.Heartbeat:Connect(function()
+-- MAIN SMART FARM LOOP (STRICT SPEED 26 & AUTO SKIP STUCK COINS)
+RunService.Heartbeat:Connect(function(dt)
     pcall(function()
         if not farmActive then return end
 
@@ -157,6 +162,8 @@ RunService.Heartbeat:Connect(function()
         local allCoins = getCoins()
         if #allCoins == 0 then
             cleanupPhysics()
+            blacklistedCoins = {}
+            currentTargetCoin = nil
             return
         end
 
@@ -171,13 +178,26 @@ RunService.Heartbeat:Connect(function()
 
         local coin = getNearestCoin()
         if coin then
-            -- الموقع تحت الأرض بالضبط بـ 8 ستود
+            -- إدارة وتحديد العملة الحالية مع مؤقت الذكاء
+            if coin ~= currentTargetCoin then
+                currentTargetCoin = coin
+                coinTargetStartTime = tick()
+            else
+                -- إذا استغرق عند نفس العملة أكثر من 1.2 ثانية دون أن تتلاشى -> تخطَّها فوراً!
+                if tick() - coinTargetStartTime > 1.2 then
+                    blacklistedCoins[coin] = true
+                    currentTargetCoin = nil
+                    return
+                end
+            end
+
+            -- الحركة المستمرة السرعة 26 تحت الأرض بـ 8 ستود
             local targetPos = Vector3.new(coin.Position.X, coin.Position.Y - UNDER_OFFSET, coin.Position.Z)
             local delta = targetPos - hrp.Position
+            local moveStep = math.min(delta.Magnitude, FARM_SPEED * dt * 2)
             
-            -- الحركة الانسيابية تحت الأرض فقط
-            if delta.Magnitude > 0.2 then
-                hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * math.min(delta.Magnitude, FARM_SPEED * 0.03))
+            if delta.Magnitude > 0.1 then
+                hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * moveStep)
             else
                 hrp.CFrame = CFrame.new(targetPos)
             end
@@ -185,18 +205,15 @@ RunService.Heartbeat:Connect(function()
             hrp.AssemblyLinearVelocity = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
 
-            -- تفعيل اللمس التلقائي للعملة من أسفلها دون مغادرة مكانك
-            if tick() - lastTouchTick > 0.04 then
-                lastTouchTick = tick()
-                triggerUndergroundTouch(coin, char, hrp)
-            end
+            -- لمس مستمر وسريع جداً
+            triggerUndergroundTouch(coin, char, hrp)
         end
     end)
 end)
 
 -- UI INTERFACE SETUP
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AmoChereebUltimateV61"
+ScreenGui.Name = "AmoChereebUltimateV62"
 ScreenGui.Parent = CoreGui
 ScreenGui.ResetOnSpawn = false
 
@@ -243,7 +260,7 @@ local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(1, -50, 1, 0)
 TitleText.Position = UDim2.new(0, 15, 0, 0)
 TitleText.BackgroundTransparency = 1
-TitleText.Text = "⚡ عمو تشريب Hub - v61"
+TitleText.Text = "⚡ عمو تشريب Hub - v62"
 TitleText.TextColor3 = Color3.fromRGB(255, 170, 0)
 TitleText.Font = Enum.Font.GothamBold
 TitleText.TextSize = 15
@@ -346,7 +363,7 @@ local function createToggle(yPos, text, icon, default, callback)
     end)
 end
 
-createToggle(0, "تجميع تحت الأرض (بدون تلبورت)", "🪙", false, function(st)
+createToggle(0, "تجميع العملات تحت الأرض (سرعة 26)", "🪙", false, function(st)
     farmActive = st
     if not st then
         cleanupPhysics()
