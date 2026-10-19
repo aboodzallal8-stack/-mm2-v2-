@@ -1,8 +1,8 @@
 --[[
-    عمو تشريب Hub - Mobile Edition v2
-    - Clean GUI with clear ON/OFF indicators
-    - Auto farm (max 50) for ALL roles
-    - Murderer mode: fling all players before reset
+    عمو تشريب Hub - Mobile Edition v3
+    - Clean GUI
+    - Auto farm (walk, not teleport) - no kicks
+    - Real murderer fling (detect + fly out of map)
     - Walk speed 27 (editable)
     - Farm persists through death
     - Anti-AFK included
@@ -22,16 +22,14 @@ local Camera = workspace.CurrentCamera
 -- ========== Config ==========
 local CoinLimit = 50
 local walkSpeed = 27
-local FLY_DISTANCE = 120 -- ثابت داخلياً (لا يوجد خيار في الواجهة)
+local AUTO_TELEPORT_DISTANCE = 400 -- إذا أبعد من هذا نستخدم تيليبورت (نادر)
 
 -- ========== States ==========
 local farmActive = false
 local autoFlingActive = false
-local murdererAutoFlingActive = false -- افتراضي OFF (تقدر تفعلها)
 local antiAFKActive = true
 local pendingRespawn = false
 local flingCooldown = 0
-local farmWasActive = false -- لتتبع حالة الفارم عند الموت
 
 -- ========== Anti-AFK ==========
 task.spawn(function()
@@ -62,86 +60,104 @@ RunService.Heartbeat:Connect(function()
         local char = LocalPlayer.Character
         if char then
             local hum = char:FindFirstChildOfClass("Humanoid")
-            if hum and hum.WalkSpeed ~= walkSpeed then
+            if hum and hum.WalkSpeed ~= walkSpeed and not pendingRespawn then
                 hum.WalkSpeed = walkSpeed
             end
         end
     end)
 end)
 
--- ========== Fling System ==========
-local function flingTarget(targetPlayer)
-    if not targetPlayer or not targetPlayer.Character then return end
-    local char = targetPlayer.Character
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-
-    local bv = Instance.new("BodyVelocity")
-    bv.Name = "FlingBypass"
-    bv.Velocity = Vector3.new(0, 5000, 0)
-    bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-    bv.Parent = hrp
-
-    task.spawn(function()
-        for i = 1, 100 do
-            if not hrp.Parent then break end
-            pcall(function()
-                hrp.CFrame = hrp.CFrame * CFrame.Angles(math.rad(90), math.rad(45), math.rad(30))
-                hrp.Velocity = Vector3.new(math.random(-2500, 2500), 3500, math.random(-2500, 2500))
-            end)
-            task.wait(0.015)
-        end
-        if bv and bv.Parent then bv:Destroy() end
-    end)
-end
-
+-- ========== Murderer Detection (محسّن) ==========
 local function detectMurderer()
     for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            for _, tool in ipairs(player.Character:GetChildren()) do
-                if tool:IsA("Tool") and tool.Name == "Knife" then
-                    return player
+        if player == LocalPlayer then continue end
+        
+        -- 1) فحص الـ Backpack
+        local bp = player:FindFirstChild("Backpack")
+        if bp and bp:FindFirstChild("Knife") then 
+            return player 
+        end
+        
+        -- 2) فحص الشخصية (يحمل السكين)
+        local char = player.Character
+        if char then
+            for _, tool in ipairs(char:GetChildren()) do
+                if tool:IsA("Tool") and tool.Name == "Knife" then 
+                    return player 
                 end
             end
-            local bp = player:FindFirstChild("Backpack")
-            if bp and bp:FindFirstChild("Knife") then
-                return player
+        end
+        
+        -- 3) فحص الـ Attributes (بعض نسخ MM2 تخزن الدور هنا)
+        local role = player:GetAttribute("Role") or player:GetAttribute("role") or player:GetAttribute("GameRole")
+        if role and (tostring(role):lower():find("murder") or tostring(role) == "Murderer") then
+            return player
+        end
+        
+        -- 4) فحص workspace للأدوات المرمية
+        if char then
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                for _, obj in ipairs(workspace:GetChildren()) do
+                    if obj:IsA("Tool") and obj.Name == "Knife" and obj.Parent == char then
+                        return player
+                    end
+                end
             end
         end
     end
     return nil
 end
 
-local function isLocalMurderer()
-    local char = LocalPlayer.Character
-    if not char then return false end
-    for _, tool in ipairs(char:GetChildren()) do
-        if tool:IsA("Tool") and tool.Name == "Knife" then return true end
-    end
-    local bp = LocalPlayer:FindFirstChild("Backpack")
-    if bp and bp:FindFirstChild("Knife") then return true end
-    return false
-end
+-- ========== Fling System (محسّن - يقتل فعلاً) ==========
+local function flingTarget(targetPlayer)
+    if not targetPlayer or not targetPlayer.Character then return false end
+    local char = targetPlayer.Character
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum then return false end
 
-local function flingAllOtherPlayers()
-    local count = 0
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            local hum = player.Character:FindFirstChildOfClass("Humanoid")
-            if hum and hum.Health > 0 then
-                flingTarget(player)
-                count = count + 1
-            end
+    -- إيقاف أي حركة سابقة
+    hum.PlatformStand = true
+    hum.Sit = false
+
+    -- BodyAngularVelocity للدوران المجنون
+    local bav = Instance.new("BodyAngularVelocity")
+    bav.Name = "FlingAngular"
+    bav.AngularVelocity = Vector3.new(math.huge, math.huge, math.huge)
+    bav.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+    bav.Parent = hrp
+
+    -- BodyVelocity للطيران
+    local bv = Instance.new("BodyVelocity")
+    bv.Name = "FlingLinear"
+    bv.Velocity = Vector3.new(0, 500000, 0)
+    bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    bv.Parent = hrp
+
+    -- تعديل CFrame بشكل متكرر لضمان الطيران
+    task.spawn(function()
+        for i = 1, 150 do
+            if not hrp.Parent or not hum.Parent then break end
+            pcall(function()
+                hrp.CFrame = hrp.CFrame * CFrame.Angles(math.rad(180), math.rad(90), math.rad(45))
+                hrp.Velocity = Vector3.new(math.random(-50000, 50000), 50000, math.random(-50000, 50000))
+                hrp.RotVelocity = Vector3.new(math.random(-50000, 50000), math.random(-50000, 50000), math.random(-50000, 50000))
+            end)
+            task.wait(0.02)
         end
-    end
-    return count
+        if bav and bav.Parent then bav:Destroy() end
+        if bv and bv.Parent then bv:Destroy() end
+    end)
+
+    return true
 end
 
--- فلنك القاتل (لما تكون بريء/شريف)
+-- فلنك القاتل (مع الانتقال قريباً منه أولاً)
 task.spawn(function()
     while true do
         task.wait(1)
-        if autoFlingActive and (tick() - flingCooldown) > 2.5 then
+        if autoFlingActive and (tick() - flingCooldown) > 3 then
             local murderer = detectMurderer()
             if murderer and murderer.Character then
                 local myChar = LocalPlayer.Character
@@ -149,12 +165,19 @@ task.spawn(function()
                 if myChar and murdChar then
                     local myRoot = myChar:FindFirstChild("HumanoidRootPart")
                     local murdRoot = murdChar:FindFirstChild("HumanoidRootPart")
-                    if myRoot and murdRoot then
+                    local murdHum = murdChar:FindFirstChildOfClass("Humanoid")
+                    if myRoot and murdRoot and murdHum and murdHum.Health > 0 then
                         local dist = (myRoot.Position - murdRoot.Position).Magnitude
-                        if dist < 250 then
-                            flingTarget(murderer)
-                            flingCooldown = tick()
+                        
+                        -- إذا بعيد، ننتقل قريب منه أولاً (تيليبورت صغير مقبول)
+                        if dist > 30 then
+                            myRoot.CFrame = murdRoot.CFrame * CFrame.new(0, 0, 3)
+                            task.wait(0.15)
                         end
+                        
+                        -- الآن نفلنكه
+                        flingTarget(murderer)
+                        flingCooldown = tick()
                     end
                 end
             end
@@ -195,10 +218,10 @@ task.spawn(function()
     end
 end)
 
--- Main panel (bigger for cleaner layout)
+-- Main panel
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 340, 0, 390)
-MainFrame.Position = UDim2.new(0.5, -170, 0.5, -195)
+MainFrame.Size = UDim2.new(0, 340, 0, 350)
+MainFrame.Position = UDim2.new(0.5, -170, 0.5, -175)
 MainFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
@@ -207,7 +230,7 @@ MainFrame.ClipsDescendants = true
 MainFrame.Parent = ScreenGui
 Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 20)
 
--- Gold border glow
+-- Gold border
 local GoldBorder = Instance.new("Frame")
 GoldBorder.Size = UDim2.new(1, 6, 1, 6)
 GoldBorder.Position = UDim2.new(0, -3, 0, -3)
@@ -285,10 +308,10 @@ local function makeDraggable(handle, target)
 end
 makeDraggable(TitleBar, MainFrame)
 
--- Better toggle button design
+-- Toggle button
 local function makeToggle(yPos, text, icon, defaultState, callback)
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, -24, 0, 52)
+    btn.Size = UDim2.new(1, -24, 0, 56)
     btn.Position = UDim2.new(0, 12, 0, yPos)
     btn.BackgroundColor3 = defaultState and Color3.fromRGB(25, 70, 25) or Color3.fromRGB(22, 22, 22)
     btn.BorderSizePixel = 2
@@ -298,7 +321,6 @@ local function makeToggle(yPos, text, icon, defaultState, callback)
     btn.Parent = MainFrame
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 14)
 
-    -- Icon (right side for Arabic)
     local iconLbl = Instance.new("TextLabel")
     iconLbl.Size = UDim2.new(0, 44, 1, 0)
     iconLbl.Position = UDim2.new(1, -46, 0, 0)
@@ -308,7 +330,6 @@ local function makeToggle(yPos, text, icon, defaultState, callback)
     iconLbl.Font = Enum.Font.GothamBold
     iconLbl.Parent = btn
 
-    -- Text (right aligned for Arabic)
     local textLbl = Instance.new("TextLabel")
     textLbl.Size = UDim2.new(0, 220, 1, 0)
     textLbl.Position = UDim2.new(0, 12, 0, 0)
@@ -316,14 +337,13 @@ local function makeToggle(yPos, text, icon, defaultState, callback)
     textLbl.Text = text
     textLbl.TextColor3 = Color3.fromRGB(230, 230, 230)
     textLbl.Font = Enum.Font.GothamBold
-    textLbl.TextSize = 14
+    textLbl.TextSize = 15
     textLbl.TextXAlignment = Enum.TextXAlignment.Right
     textLbl.Parent = btn
 
-    -- Status dot
     local dot = Instance.new("Frame")
     dot.Size = UDim2.new(0, 12, 0, 12)
-    dot.Position = UDim2.new(0, 14, 0.5, -6)
+    dot.Position = UDim2.new(0, 16, 0.5, -6)
     dot.BackgroundColor3 = defaultState and Color3.fromRGB(80, 220, 80) or Color3.fromRGB(100, 100, 100)
     dot.BorderSizePixel = 0
     dot.Parent = btn
@@ -343,7 +363,7 @@ local function makeToggle(yPos, text, icon, defaultState, callback)
         callback(state)
     end)
 
-    return btn, function() return state end
+    return btn
 end
 
 -- Speed setting
@@ -381,30 +401,24 @@ SpeedBox.FocusLost:Connect(function()
     end
 end)
 
--- Toggle buttons
-local FarmBtn, getFarmState = makeToggle(100, "جمع تلقائي", "🌾", false, function(state)
+-- Toggles
+local FarmBtn = makeToggle(100, "جمع تلقائي", "🌾", false, function(state)
     farmActive = state
-    if state then
-        farmWasActive = true
-    end
 end)
 
-local FlingMurdererBtn, getFlingMurdererState = makeToggle(160, "فلنك القاتل", "💥", false, function(state)
+local FlingMurdererBtn = makeToggle(166, "فلنك القاتل", "💥", false, function(state)
     autoFlingActive = state
+    if state then flingCooldown = 0 end
 end)
 
-local MurdererFlingAllBtn, getMurdererFlingAllState = makeToggle(220, "فلنك الكل كقاتل", "🔪", false, function(state)
-    murdererAutoFlingActive = state
-end)
-
-local AFKBtn, getAFKState = makeToggle(280, "مكافحة الطرد", "⏳", true, function(state)
+local AFKBtn = makeToggle(232, "مكافحة الطرد", "⏳", true, function(state)
     antiAFKActive = state
 end)
 
--- Coin info (bottom)
+-- Coin info
 local CoinPanel = Instance.new("Frame")
-CoinPanel.Size = UDim2.new(1, -24, 0, 40)
-CoinPanel.Position = UDim2.new(0, 12, 0, 344)
+CoinPanel.Size = UDim2.new(1, -24, 0, 44)
+CoinPanel.Position = UDim2.new(0, 12, 0, 296)
 CoinPanel.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
 CoinPanel.BorderSizePixel = 2
 CoinPanel.BorderColor3 = Color3.fromRGB(212, 175, 55)
@@ -421,7 +435,7 @@ CoinInfo.Font = Enum.Font.GothamBold
 CoinInfo.TextSize = 15
 CoinInfo.Parent = CoinPanel
 
--- Float button drag/tap
+-- Float button drag
 local floatDragging = false
 local floatDragStart, floatStartPos
 local floatMoved = false
@@ -434,18 +448,6 @@ FloatBtn.InputBegan:Connect(function(input)
         floatStartPos = FloatBtn.Position
         floatMoved = false
         floatEmergencyFired = false
-        task.delay(2, function()
-            if floatDragging and not floatMoved and not floatEmergencyFired then
-                floatEmergencyFired = true
-                farmActive = false
-                autoFlingActive = false
-                -- Visual reset
-                FarmBtn.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
-                FarmBtn.BorderColor3 = Color3.fromRGB(50, 50, 50)
-                FlingMurdererBtn.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
-                FlingMurdererBtn.BorderColor3 = Color3.fromRGB(50, 50, 50)
-            end
-        end)
     end
 end)
 
@@ -462,13 +464,13 @@ end)
 FloatBtn.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
         floatDragging = false
-        if not floatMoved and not floatEmergencyFired then
+        if not floatMoved then
             MainFrame.Visible = not MainFrame.Visible
         end
     end
 end)
 
--- ========== Farm System ==========
+-- ========== Farm System (walk, not teleport) ==========
 local function getHRP()
     local char = LocalPlayer.Character
     return char and char:FindFirstChild("HumanoidRootPart")
@@ -491,17 +493,10 @@ local function getNearestCoin()
     return closest, dist
 end
 
--- Auto Reset (works for ALL roles, flings all if murderer + option on)
+-- Auto Reset (يعمل لكل الأدوار)
 local function doAutoRespawn()
     if pendingRespawn then return end
     pendingRespawn = true
-
-    local wasMurderer = isLocalMurderer()
-
-    if wasMurderer and murdererAutoFlingActive then
-        pcall(flingAllOtherPlayers)
-        task.wait(1.5) -- give fling time to kill everyone
-    end
 
     local char = LocalPlayer.Character
     if char then
@@ -513,14 +508,13 @@ local function doAutoRespawn()
     task.wait(3)
     pendingRespawn = false
 
-    -- Continue farming after respawn (if farm was on)
     if farmActive then
-        task.wait(0.5)
+        task.wait(0.3)
         applySpeed()
     end
 end
 
--- Event-based reset (fires whenever bag reaches max, for any role)
+-- Event-based reset
 task.spawn(function()
     local remotes = ReplicatedStorage:WaitForChild("Remotes", 10)
     if not remotes then return end
@@ -535,7 +529,7 @@ task.spawn(function()
     end)
 end)
 
--- Polling backup (in case event fails)
+-- Polling backup
 task.spawn(function()
     while true do
         task.wait(0.3)
@@ -562,18 +556,25 @@ task.spawn(function()
     end
 end)
 
--- Main farm loop (persists through death)
+-- Farm loop (WALK, no teleport spam)
 task.spawn(function()
     while true do
-        task.wait(0.08)
+        task.wait(0.15)
         pcall(function()
             if farmActive and not pendingRespawn then
-                local coin = getNearestCoin()
+                local coin, dist = getNearestCoin()
                 if coin then
-                    local hrp = getHRP()
-                    if hrp then
-                        hrp.CFrame = coin.CFrame + Vector3.new(0, 2, 0)
-                        task.wait(0.04)
+                    local char = LocalPlayer.Character
+                    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                    local hum = char and char:FindFirstChildOfClass("Humanoid")
+                    if hrp and hum then
+                        if dist > AUTO_TELEPORT_DISTANCE then
+                            -- مسافة بعيدة جداً: تيليبورت (نادر جداً)
+                            hrp.CFrame = coin.CFrame + Vector3.new(0, 2, 0)
+                        else
+                            -- يمشي عادي (آمن من الطرد)
+                            hum:MoveTo(coin.Position)
+                        end
                     end
                 end
             end
@@ -581,7 +582,7 @@ task.spawn(function()
     end
 end)
 
--- Coin info display
+-- Coin info
 local function updateCoinInfo()
     local count = 0
     local hrp = getHRP()
@@ -596,7 +597,6 @@ local function updateCoinInfo()
             end
         end
     end
-    -- Get current bag value if available
     local bagTxt = "0"
     local mainGui = LocalPlayer.PlayerGui:FindFirstChild("MainGUI")
     if mainGui and mainGui:FindFirstChild("Game") and mainGui.Game:FindFirstChild("CoinBags") then
@@ -618,8 +618,4 @@ end)
 LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(0.5)
     applySpeed()
-    -- If farm was on before death, continue
-    if farmActive and not pendingRespawn then
-        task.wait(0.3)
-    end
 end)
