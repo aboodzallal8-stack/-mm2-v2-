@@ -4,7 +4,7 @@
     - Auto Character Reset when Coins Reach Max (50) (server-validated)
     - Strict Real-Time Validity & Transparency Check (No Ghost Coins)
     - Underground Farm (8 Studs) at Speed 30
-    - Precise collection verification (polls GUI after touch)
+    - Fix: prevent falling through ground by preserving HRP collision & stable Humanoid state
 --]]
 
 local Players = game:GetService("Players")
@@ -40,6 +40,8 @@ local currentTargetCoin = nil
 local coinTargetStartTime = 0
 local blacklistedCoins = {}
 local hasResetForMax = false
+
+local SAFE_FALL_Y = -100 -- teleport-back threshold; tune to your game's safe area
 
 local function safeParent(instance, parent)
     if instance and parent then
@@ -89,16 +91,13 @@ local function isRealAndExistingCoin(part)
     if not part:IsDescendantOf(workspace) then
         return false
     end
-    -- filter out highly transparent or invisible parts
     if part.Transparency and part.Transparency > 0.5 then
         return false
     end
-    -- prefer parts that have touch transmitters or coin-like names/parents
     if hasTouchTransmitter(part) then
         return true
     end
     if looksCoinLike(part) then
-        -- accept looser name-based matches but ensure they are visible and in workspace
         return true
     end
     return false
@@ -109,22 +108,16 @@ local function getGameCoinCount()
     local success, result = pcall(function()
         local mainGui = LocalPlayer.PlayerGui:FindFirstChild("MainGUI")
         if not mainGui then return 0 end
-
         local gameGui = mainGui:FindFirstChild("Game")
         if not gameGui then return 0 end
-
         local coinBags = gameGui:FindFirstChild("CoinBags")
         if not coinBags then return 0 end
-
         for _, bag in ipairs(coinBags:GetDescendants()) do
             if bag:IsA("TextLabel") and bag.Name == "Coins" then
                 local num = bag.Text:match("(%d+)")
-                if num then
-                    return tonumber(num)
-                end
+                if num then return tonumber(num) end
             end
         end
-
         return 0
     end)
     return success and result or 0
@@ -137,7 +130,6 @@ task.spawn(function()
         if ok then
             collectedCoinsCount = val
         end
-        -- If we reached max and haven't reset yet, reset now (authoritative)
         if collectedCoinsCount >= COIN_MAX_LIMIT and not hasResetForMax then
             hasResetForMax = true
             pcall(function()
@@ -151,17 +143,15 @@ task.spawn(function()
     end
 end)
 
--- CACHED coin finder with strict filtering and a fallback
+-- CACHED coin finder
 local function getValidCoins()
     if tick() - lastCacheUpdate < 0.12 then
         return coinsCache
     end
     lastCacheUpdate = tick()
     coinsCache = {}
-
     local seen = {}
     pcall(function()
-        -- prefer scanning known containers first
         for _, map in ipairs(workspace:GetChildren()) do
             if map and map.Name ~= "Lobby" then
                 local container = map:FindFirstChild("CoinContainer") or map:FindFirstChild("Coins")
@@ -177,8 +167,6 @@ local function getValidCoins()
                 end
             end
         end
-
-        -- fallback: scan all workspace descendants but require strict checks
         if #coinsCache == 0 then
             for _, obj in ipairs(workspace:GetDescendants()) do
                 if obj and obj:IsA("BasePart") and not seen[obj] and not blacklistedCoins[obj] then
@@ -197,14 +185,11 @@ local function getSmartNearestCoin()
     local char = LocalPlayer.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return nil end
-
     local allCoins = getValidCoins()
     if #allCoins == 0 then return nil end
-
     local closestCoin = nil
     local shortestDistance = math.huge
     local hrpPos = hrp.Position
-
     for _, coin in ipairs(allCoins) do
         if coin and coin.Parent and coin:IsDescendantOf(workspace) then
             local dist = (hrpPos - coin.Position).Magnitude
@@ -224,10 +209,13 @@ local function cleanupPhysics()
         local hrp = char:FindFirstChild("HumanoidRootPart")
         local hum = char:FindFirstChildOfClass("Humanoid")
         if hrp then
+            -- preserve HRP collisions so character doesn't fall through ground
             hrp.AssemblyLinearVelocity = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
+            hrp.CanCollide = true
         end
         if hum then
+            -- let Humanoid behave normally
             hum.PlatformStand = false
         end
     end)
@@ -244,11 +232,11 @@ end)
 local function triggerUndergroundTouch(coin, char, hrp)
     if not coin or not coin.Parent or not hrp then return false end
     local ok = pcall(function()
-        -- Touch with HRP and all body parts; smaller delays between calls for reliability
         firetouchinterest(hrp, coin, 0)
         firetouchinterest(hrp, coin, 1)
         for _, part in ipairs(char:GetChildren()) do
             if part:IsA("BasePart") then
+                -- avoid toggling HRP collision here; touches still work when other parts touch
                 firetouchinterest(part, coin, 0)
                 firetouchinterest(part, coin, 1)
             end
@@ -257,30 +245,19 @@ local function triggerUndergroundTouch(coin, char, hrp)
     return ok
 end
 
--- Attempt to collect a coin and verify server increment; returns true if collection confirmed
 local function attemptCollectCoin(coin, char, hrp)
-    if not coin or not coin.Parent or not char or not hrp then
-        return false
-    end
-
-    -- record coin count before touching
+    if not coin or not coin.Parent or not char or not hrp then return false end
     local before = getGameCoinCount()
-    -- attempt touch sequence
     pcall(function()
-        -- do a couple of quick touch attempts with tiny waits for robustness
         triggerUndergroundTouch(coin, char, hrp)
         task.wait(0.05)
         triggerUndergroundTouch(coin, char, hrp)
     end)
-
-    -- poll GUI for a short window to confirm server-side collection
     local deadline = tick() + 0.8
     while tick() < deadline do
         local now = getGameCoinCount()
         if now and now > before then
-            -- confirmed collection
             collectedCoinsCount = now
-            -- if reached limit, reset once
             if collectedCoinsCount >= COIN_MAX_LIMIT and not hasResetForMax then
                 hasResetForMax = true
                 pcall(function()
@@ -292,8 +269,6 @@ local function attemptCollectCoin(coin, char, hrp)
         end
         task.wait(0.08)
     end
-
-    -- failed to confirm collection -> treat as ghost coin
     blacklistedCoins[coin] = true
     return false
 end
@@ -302,11 +277,7 @@ end
 RunService.Heartbeat:Connect(function(dt)
     pcall(function()
         if not farmActive then return end
-
-        -- ensure we keep authoritative count updated
         collectedCoinsCount = getGameCoinCount()
-
-        -- auto-reset if somehow reached limit outside collection sequence
         if collectedCoinsCount >= COIN_MAX_LIMIT and not hasResetForMax then
             hasResetForMax = true
             pcall(function()
@@ -317,11 +288,24 @@ RunService.Heartbeat:Connect(function(dt)
             end)
             return
         end
-
         local char = LocalPlayer.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         if not hrp or not hum or hum.Health <= 0 then return end
+
+        -- safety: if HRP fell below a dangerous Y, teleport back to spawn to avoid death/collection loss
+        if hrp.Position.Y < SAFE_FALL_Y then
+            pcall(function()
+                local spawn = LocalPlayer.RespawnLocation or workspace:FindFirstChild("SpawnLocation")
+                if spawn and spawn.Position then
+                    hrp.CFrame = CFrame.new(spawn.Position + Vector3.new(0, 5, 0))
+                else
+                    -- fallback use character's HumanoidRootPart + Vector3 up
+                    hrp.CFrame = CFrame.new(hrp.Position + Vector3.new(0, 50, 0))
+                end
+            end)
+            return
+        end
 
         local allCoins = getValidCoins()
         if #allCoins == 0 then
@@ -331,7 +315,7 @@ RunService.Heartbeat:Connect(function(dt)
             return
         end
 
-        -- validate current target
+        -- Validate current target
         if currentTargetCoin then
             if not currentTargetCoin.Parent or not currentTargetCoin:IsDescendantOf(workspace) then
                 currentTargetCoin = nil
@@ -339,26 +323,32 @@ RunService.Heartbeat:Connect(function(dt)
         end
 
         hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
-        hum.PlatformStand = true
+        -- Keep PlatformStand false so Humanoid remains stable on ground
+        hum.PlatformStand = false
+
+        -- Disable collisions only for non-HRP parts to avoid falling through ground
         for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then part.CanCollide = false end
+            if part:IsA("BasePart") then
+                if part.Name ~= "HumanoidRootPart" then
+                    part.CanCollide = false
+                else
+                    part.CanCollide = true
+                end
+            end
         end
 
         local coin = getSmartNearestCoin()
         if coin then
-            -- skip invalid coin
-            if not coin.Parent or not coin:IsDescendantOf(workspace) or coin.Transparency > 0.8 then
+            if not coin.Parent or coin.Transparency > 0.8 then
                 blacklistedCoins[coin] = true
                 currentTargetCoin = nil
                 return
             end
 
-            -- start tracking a new target
             if coin ~= currentTargetCoin then
                 currentTargetCoin = coin
                 coinTargetStartTime = tick()
             else
-                -- if stuck too long on same coin, blacklist and move on
                 if tick() - coinTargetStartTime > 0.8 then
                     blacklistedCoins[coin] = true
                     currentTargetCoin = nil
@@ -366,8 +356,13 @@ RunService.Heartbeat:Connect(function(dt)
                 end
             end
 
-            -- move under the coin smoothly (underground)
-            local targetPos = Vector3.new(coin.Position.X, coin.Position.Y - UNDER_OFFSET, coin.Position.Z)
+            -- compute a safe underground target but don't push below extreme depths
+            local desiredY = coin.Position.Y - UNDER_OFFSET
+            -- keep desiredY above a safe floor (avoid going too low); if HRP would go below SAFE_FALL_Y+50, clamp it
+            if desiredY < SAFE_FALL_Y + 50 then
+                desiredY = SAFE_FALL_Y + 50
+            end
+            local targetPos = Vector3.new(coin.Position.X, desiredY, coin.Position.Z)
             local delta = targetPos - hrp.Position
             local moveStep = math.min(delta.Magnitude, FARM_SPEED * dt)
             if delta.Magnitude > 0.05 then
@@ -376,19 +371,16 @@ RunService.Heartbeat:Connect(function(dt)
                 hrp.CFrame = CFrame.new(targetPos)
             end
 
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.AssemblyAngularVelocity = Vector3.zero
+            hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
 
-            -- only attempt collection when very close vertically/horizontally
             if (hrp.Position - Vector3.new(coin.Position.X, hrp.Position.Y, coin.Position.Z)).Magnitude <= 1.5 then
                 local collected = attemptCollectCoin(coin, char, hrp)
                 if collected then
-                    -- successful: clear blacklist for this coin (it may be removed server-side)
                     blacklistedCoins[coin] = nil
                     currentTargetCoin = nil
                     return
                 else
-                    -- failed: coin already blacklisted inside attemptCollectCoin
                     currentTargetCoin = nil
                     return
                 end
@@ -495,7 +487,6 @@ ProgressBarFill.BackgroundColor3 = Color3.fromRGB(255, 170, 0)
 ProgressBarFill.Parent = ProgressBarBG
 Instance.new("UICorner", ProgressBarFill).CornerRadius = UDim.new(1, 0)
 
--- UI updater: reads authoritative collectedCoinsCount
 task.spawn(function()
     while true do
         pcall(function()
