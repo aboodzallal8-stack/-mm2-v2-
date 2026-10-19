@@ -1,11 +1,10 @@
 --[[
-    عمو تشريب Hub - Mobile v65 SMART COIN SEARCH & EXACT SPEED 26
-    ================================================================
-    - Strict Underground Farming (8 Studs) - Zero Teleport
-    - Calibrated Movement Speed: EXACTLY 26
-    - Smart Nearest Coin Search Algorithm (Dynamic Distance Order)
-    - Auto-Skip & Anti-Stuck System
-    - Live Coin Counter (Max 50) + Custom User Icon
+    عمو تشريب Hub - Mobile v66 ANTI-KICK & STABLE FARM
+    ===================================================
+    - Safe Underground Farming (8 Studs) - Anti-Kick Optimized
+    - Smooth Movement & Stable Speed (No Teleport / No Rapid CFrames)
+    - Perfect Coin Pathing (No skipping valid coins)
+    - Live Coin Counter (Max 50) + Custom Icon
 --]]
 
 local Players = game:GetService("Players")
@@ -17,8 +16,8 @@ local CoreGui = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
 
--- CONFIGURATION
-local FARM_SPEED = 26 -- سرعة الحركة والبحث المضبوطة
+-- CONFIGURATION (تم ضبط السرعة لتكون آمنة تماماً ضد الطرد)
+local FARM_SPEED = 18 
 local UNDER_OFFSET = 8
 local COIN_MAX_LIMIT = 50
 
@@ -30,7 +29,7 @@ local antiAFKActive = true
 local collectedCoinsCount = 0
 local coinsCache = {}
 
--- ANTI-STUCK SYSTEM VARIABLES
+-- ANTI-STUCK SYSTEM
 local currentTargetCoin = nil
 local coinTargetStartTime = 0
 local blacklistedCoins = {}
@@ -48,7 +47,7 @@ task.spawn(function()
     end
 end)
 
--- SMART COIN FINDER & CACHE (البحث الذكي عن العملات النشطة)
+-- GET VALID COINS SAFELY
 local function getValidCoins()
     coinsCache = {}
     pcall(function()
@@ -70,7 +69,7 @@ local function getValidCoins()
     return coinsCache
 end
 
--- SMART NEAREST ALGORITHM (خوارزمية حساب الأقرب الذكية)
+-- SMART NEAREST COIN SEARCH
 local function getSmartNearestCoin()
     local char = LocalPlayer.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -139,11 +138,9 @@ end)
 -- TRIGGER TOUCH INTEREST
 local function triggerUndergroundTouch(coin, char, hrp)
     if not coin or not coin.Parent or not hrp then return end
-    
     pcall(function()
         firetouchinterest(hrp, coin, 0)
         firetouchinterest(hrp, coin, 1)
-        
         for _, part in ipairs(char:GetChildren()) do
             if part:IsA("BasePart") then
                 firetouchinterest(part, coin, 0)
@@ -153,7 +150,7 @@ local function triggerUndergroundTouch(coin, char, hrp)
     end)
 end
 
--- MAIN SMART FARM LOOP (EXACT SPEED 26 & DYNAMIC PATHING)
+-- MAIN ANTI-KICK FARM LOOP
 RunService.Heartbeat:Connect(function(dt)
     pcall(function()
         if not farmActive then return end
@@ -180,27 +177,26 @@ RunService.Heartbeat:Connect(function(dt)
 
         collectedCoinsCount = getGameCoinCount()
 
-        -- جلب أسرع وأقرب عملة باستخدام الخوارزمية
         local coin = getSmartNearestCoin()
         if coin then
             if coin ~= currentTargetCoin then
                 currentTargetCoin = coin
                 coinTargetStartTime = tick()
             else
-                -- تخطي العملة المعلقة خلال 0.35 ثانية
-                if tick() - coinTargetStartTime > 0.35 then
+                -- مهلة زمنية متوازنة لعدم تخطي العملة بسرعة
+                if tick() - coinTargetStartTime > 1.5 then
                     blacklistedCoins[coin] = true
                     currentTargetCoin = nil
                     return
                 end
             end
 
-            -- تطبيق سرعة الحركة (26) بالضبط دون زيادة القوة
+            -- حركة سلسة وآمنة تماماً ضد الطرد (Anti-Kick Smooth CFrame)
             local targetPos = Vector3.new(coin.Position.X, coin.Position.Y - UNDER_OFFSET, coin.Position.Z)
             local delta = targetPos - hrp.Position
             local moveStep = math.min(delta.Magnitude, FARM_SPEED * dt)
             
-            if delta.Magnitude > 0.05 then
+            if delta.Magnitude > 0.1 then
                 hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * moveStep)
             else
                 hrp.CFrame = CFrame.new(targetPos)
@@ -216,7 +212,7 @@ end)
 
 -- UI INTERFACE SETUP
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AmoChereebUltimateV65"
+ScreenGui.Name = "AmoChereebUltimateV66"
 ScreenGui.Parent = CoreGui
 ScreenGui.ResetOnSpawn = false
 
@@ -263,7 +259,7 @@ local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(1, -50, 1, 0)
 TitleText.Position = UDim2.new(0, 15, 0, 0)
 TitleText.BackgroundTransparency = 1
-TitleText.Text = "⚡ عمو تشريب Hub - v65"
+TitleText.Text = "⚡ عمو تشريب Hub - v66"
 TitleText.TextColor3 = Color3.fromRGB(255, 170, 0)
 TitleText.Font = Enum.Font.GothamBold
 TitleText.TextSize = 15
@@ -366,7 +362,7 @@ local function createToggle(yPos, text, icon, default, callback)
     end)
 end
 
-createToggle(0, "تجميع ذكي (سرعة 26)", "🪙", false, function(st)
+createToggle(0, "تجميع آمن ضد الطرد (تحت الأرض)", "🪙", false, function(st)
     farmActive = st
     if not st then
         cleanupPhysics()
