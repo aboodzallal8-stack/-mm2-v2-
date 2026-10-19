@@ -1,13 +1,12 @@
 --[[
-    عمو تشريب Hub - Mobile v12 (FIXED)
-    - Coin collection: stands at coin level (0.5 above) + waits
-    - SAFE speed: 45 studs/sec (no kick)
-    - Smart murderer fling: tries 20 times (guaranteed kill)
+    عمو تشريب Hub - Mobile v13 (REAL FIXES)
+    - Smart teleport: 3 levels (far/mid/near)
+    - Real collection: PlatformStand OFF during collect + position ON coin
+    - Real fling: 3 methods x 10 attempts (guaranteed)
 --]]
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local VirtualUser = game:GetService("VirtualUser")
 local CoreGui = game:GetService("CoreGui")
@@ -16,20 +15,22 @@ local LocalPlayer = Players.LocalPlayer
 
 -- ========== Config ==========
 local walkSpeed = 27
-local FLY_SPEED = 45 -- SAFE (كان 180 يطرد)
-local TELEPORT_THRESHOLD = 60
-local COIN_HEIGHT = 0.5 -- 0.5 ستود فوق الكوين (يلمسها فعلاً)
+local FLY_SPEED_NEAR = 45    -- قريب (آمن)
+local FLY_SPEED_MID = 120    -- متوسط
+local FLY_SPEED_FAR = 350    -- بعيد (شبه تيليبورت لكن آمن)
+local TELEPORT_THRESHOLD = 500 -- لو أبعد من كذا → تيليبورت مباشر
+local COLLECT_HEIGHT = 2     -- 2 ستود فوق الكوين
+local COLLECT_TIMEOUT = 1.2  -- 1.2 ثانية max لكل كوين
 
 -- ========== States ==========
 local farmActive = false
 local flingMurdererActive = false
 local antiAFKActive = true
 local pendingRespawn = false
-local hasTeleportedToMap = false
-local murdererBeingFlinged = {}
 local currentTarget = nil
 local waitingForCollect = false
 local collectStartTime = 0
+local lastFlingTime = 0
 
 -- ========== Anti-AFK ==========
 task.spawn(function()
@@ -55,60 +56,105 @@ end
 
 applySpeed()
 
--- ========== Murderer Detection ==========
+-- ========== Murderer Detection (4 METHODS) ==========
 local function getMurderer()
+    -- Method 1: Backpack
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
         local bp = player:FindFirstChild("Backpack")
-        if bp and bp:FindFirstChild("Knife") then return player end
-        local char = player.Character
-        if char then
-            for _, tool in ipairs(char:GetChildren()) do
-                if tool:IsA("Tool") and tool.Name == "Knife" then return player end
+        if bp then
+            for _, item in ipairs(bp:GetChildren()) do
+                if item.Name == "Knife" then return player end
             end
         end
+    end
+    -- Method 2: Character (equipped)
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        local char = player.Character
+        if char then
+            for _, item in ipairs(char:GetChildren()) do
+                if item:IsA("Tool") and item.Name == "Knife" then return player end
+            end
+        end
+    end
+    -- Method 3: Workspace (dropped knife)
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Tool") and obj.Name == "Knife" then
+            local char = obj.Parent
+            if char then
+                local player = Players:GetPlayerFromCharacter(char)
+                if player and player ~= LocalPlayer then return player end
+            end
+        end
+    end
+    -- Method 4: Attributes
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        local role = player:GetAttribute("Role") or player:GetAttribute("role")
+        if role and tostring(role):lower():find("murder") then return player end
     end
     return nil
 end
 
--- ========== Murderer Fling (TRIES 20 TIMES - GUARANTEED) ==========
+-- ========== Real Fling (3 methods x 10 attempts) ==========
 local function flingMurderer(murderer)
     if not murderer then return end
     task.spawn(function()
-        for i = 1, 20 do
+        for attempt = 1, 10 do
             local char = murderer.Character
             if not char then break end
             local hrp = char:FindFirstChild("HumanoidRootPart")
             local hum = char:FindFirstChildOfClass("Humanoid")
-            if not hrp or not hum or hum.Health <= 0 then break end
+            if not hrp or not hum then break end
+            if hum.Health <= 0 then break end
 
+            -- Method 1: BodyVelocity (linear fling up)
+            pcall(function()
+                local bv = Instance.new("BodyVelocity")
+                bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+                bv.Velocity = Vector3.new(math.random(-2000, 2000), 50000, math.random(-2000, 2000))
+                bv.Parent = hrp
+                task.delay(0.4, function() if bv and bv.Parent then bv:Destroy() end end)
+            end)
+
+            -- Method 2: BodyAngularVelocity (spin to death)
+            pcall(function()
+                local bav = Instance.new("BodyAngularVelocity")
+                bav.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+                bav.AngularVelocity = Vector3.new(9999, 9999, 9999)
+                bav.Parent = hrp
+                task.delay(0.4, function() if bav and bav.Parent then bav:Destroy() end end)
+            end)
+
+            -- Method 3: CFrame to sky
             pcall(function()
                 hrp.CFrame = CFrame.new(
                     math.random(-500, 500),
-                    5000 + (i * 500),
+                    10000 + (attempt * 1000),
                     math.random(-500, 500)
                 )
-                hrp.Velocity = Vector3.new(0, 20000, 0)
                 hum.PlatformStand = true
             end)
-            task.wait(0.1)
+
+            task.wait(0.15)
         end
     end)
 end
 
--- Loop: detect murderer and fling
+-- Fling loop
 task.spawn(function()
     while true do
         task.wait(0.5)
         if flingMurdererActive and not pendingRespawn then
-            local murderer = getMurderer()
-            if murderer and murderer.Character and not murdererBeingFlinged[murderer.UserId] then
-                local murdHum = murderer.Character:FindFirstChildOfClass("Humanoid")
-                if murdHum and murdHum.Health > 0 then
-                    murdererBeingFlinged[murderer.UserId] = true
-                    flingMurderer(murderer)
-                    task.wait(2)
-                    murdererBeingFlinged[murderer.UserId] = nil
+            if tick() - lastFlingTime > 2 then
+                local murderer = getMurderer()
+                if murderer and murderer.Character then
+                    local hum = murderer.Character:FindFirstChildOfClass("Humanoid")
+                    if hum and hum.Health > 0 then
+                        lastFlingTime = tick()
+                        flingMurderer(murderer)
+                    end
                 end
             end
         end
@@ -154,7 +200,6 @@ MainFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Visible = false
-MainFrame.ClipsDescendants = true
 MainFrame.Parent = ScreenGui
 Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 20)
 
@@ -322,7 +367,6 @@ end)
 local FarmBtn = makeToggle(100, "جمع تلقائي (طيران)", "🌾", false, function(state)
     farmActive = state
     if state then
-        hasTeleportedToMap = false
         currentTarget = nil
         waitingForCollect = false
     else
@@ -332,7 +376,6 @@ local FarmBtn = makeToggle(100, "جمع تلقائي (طيران)", "🌾", fals
             if hum then
                 hum.PlatformStand = false
                 hum.WalkSpeed = walkSpeed
-                hum.JumpPower = 50
             end
             for _, part in ipairs(char:GetDescendants()) do
                 if part:IsA("BasePart") then part.CanCollide = true end
@@ -341,9 +384,9 @@ local FarmBtn = makeToggle(100, "جمع تلقائي (طيران)", "🌾", fals
     end
 end)
 
-local FlingMurdererBtn = makeToggle(166, "فلنك القاتل الذكي", "💥", false, function(state)
+local FlingMurdererBtn = makeToggle(166, "فلنك القاتل", "💥", false, function(state)
     flingMurdererActive = state
-    if state then murdererBeingFlinged = {} end
+    if state then lastFlingTime = 0 end
 end)
 
 local AFKBtn = makeToggle(232, "مكافحة الطرد", "⏳", true, function(state)
@@ -440,6 +483,7 @@ local function doAutoRespawn()
         end
     end
 
+    -- Fling murderer at 50 coins
     if flingMurdererActive then
         local murderer = getMurderer()
         if murderer and murderer.Character then
@@ -459,7 +503,6 @@ local function doAutoRespawn()
     end
     task.wait(3)
     pendingRespawn = false
-    hasTeleportedToMap = false
 end
 
 -- Reset detection
@@ -475,14 +518,6 @@ task.spawn(function()
             if current and max and current >= max and not pendingRespawn then
                 doAutoRespawn()
             end
-        end)
-    end
-
-    local roundStart = gameplay:WaitForChild("RoundStart", 5)
-    if roundStart then
-        roundStart.OnClientEvent:Connect(function()
-            murdererBeingFlinged = {}
-            hasTeleportedToMap = false
         end)
     end
 end)
@@ -514,7 +549,7 @@ task.spawn(function()
     end
 end)
 
--- ========== FARM LOOP (SAFE + COLLECTS PROPERLY) ==========
+-- ========== MAIN FARM LOOP (SMART TELEPORT + REAL COLLECT) ==========
 RunService.Heartbeat:Connect(function(dt)
     pcall(function()
         if not farmActive or pendingRespawn then return end
@@ -524,32 +559,37 @@ RunService.Heartbeat:Connect(function(dt)
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         if not hrp or not hum or hum.Health <= 0 then return end
 
-        hum.PlatformStand = true
-        hum.WalkSpeed = 0
-        hum.JumpPower = 0
-
-        -- Noclip (everything except HRP so player stays on ground)
+        -- Noclip (all parts except HRP stays collidable)
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
                 if part.CanCollide then part.CanCollide = false end
             end
         end
 
-        -- ========== WAITING FOR COLLECT ==========
+        -- ========== STATE: WAITING FOR COLLECT (KEY FIX) ==========
         if waitingForCollect then
             local target = currentTarget
-            if not target or not target.Parent then
+            if not target or not target.Parent or not target:IsDescendantOf(workspace) then
+                -- COLLECTED! Move to next
                 waitingForCollect = false
                 currentTarget = nil
                 return
             end
 
-            -- Stand AT coin level (0.5 above)
-            hrp.CFrame = CFrame.new(target.Position + Vector3.new(0, COIN_HEIGHT, 0))
+            -- CRITICAL: Turn OFF PlatformStand so touch registers
+            hum.PlatformStand = false
+            hum.WalkSpeed = 0
+            hum.JumpPower = 0
+
+            -- Position DIRECTLY on coin (0.5 above - touches it)
+            hrp.CFrame = CFrame.new(target.Position + Vector3.new(0, 0.5, 0))
             hrp.Velocity = Vector3.zero
             hrp.RotVelocity = Vector3.zero
 
-            -- Fire touch from every body part
+            -- Force CanTouch on coin
+            pcall(function() target.CanTouch = true end)
+
+            -- Fire touch from ALL body parts
             for _, part in ipairs(char:GetDescendants()) do
                 if part:IsA("BasePart") then
                     pcall(function()
@@ -559,46 +599,51 @@ RunService.Heartbeat:Connect(function(dt)
                 end
             end
 
-            -- Wait max 3 seconds
-            if tick() - collectStartTime > 3 then
+            -- Wait max 1.2 sec then move on
+            if tick() - collectStartTime > COLLECT_TIMEOUT then
                 waitingForCollect = false
                 currentTarget = nil
             end
             return
         end
 
-        -- ========== Find nearest coin ==========
+        -- ========== Find coin ==========
         local coin, dist = getNearestCoin()
         if not coin then return end
 
-        -- 🗺️ Teleport ONCE to map
-        if not hasTeleportedToMap and dist > TELEPORT_THRESHOLD then
-            hrp.CFrame = CFrame.new(coin.Position + Vector3.new(0, COIN_HEIGHT, 0))
-            hasTeleportedToMap = true
+        -- Set PlatformStand ON for flying (safe)
+        hum.PlatformStand = true
+        hum.WalkSpeed = 0
+
+        -- 🗺️ SMART TELEPORT (3 levels)
+        if dist > TELEPORT_THRESHOLD then
+            -- FAR: Direct teleport (map change)
+            hrp.CFrame = CFrame.new(coin.Position + Vector3.new(0, COLLECT_HEIGHT, 0))
+            hrp.Velocity = Vector3.zero
+            -- Trigger collect
             currentTarget = coin
             waitingForCollect = true
             collectStartTime = tick()
-            return
-        end
-
-        -- Close enough? Start collect
-        if dist < 4 then
+        elseif dist > 100 then
+            -- MID: Big step (fast but safe)
+            local delta = (coin.Position + Vector3.new(0, COLLECT_HEIGHT, 0)) - hrp.Position
+            local step = math.min(FLY_SPEED_FAR * dt, delta.Magnitude - 3)
+            if step > 0 then
+                hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * step)
+            end
+        elseif dist > 10 then
+            -- CLOSE-MID: Medium speed
+            local delta = (coin.Position + Vector3.new(0, COLLECT_HEIGHT, 0)) - hrp.Position
+            local step = math.min(FLY_SPEED_MID * dt, delta.Magnitude - 2)
+            if step > 0 then
+                hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * step)
+            end
+        else
+            -- VERY CLOSE: Start collect
             currentTarget = coin
             waitingForCollect = true
             collectStartTime = tick()
-            hrp.CFrame = CFrame.new(coin.Position + Vector3.new(0, COIN_HEIGHT, 0))
-            return
-        end
-
-        -- ========== FLY towards coin (SAFE 45) ==========
-        local targetPos = coin.Position + Vector3.new(0, COIN_HEIGHT, 0)
-        local delta = targetPos - hrp.Position
-        local flyDist = delta.Magnitude
-
-        local step = math.min(FLY_SPEED * dt, flyDist - 1)
-        if step > 0 then
-            local newPos = hrp.Position + delta.Unit * step
-            hrp.CFrame = CFrame.new(newPos)
+            hrp.CFrame = CFrame.new(coin.Position + Vector3.new(0, 0.5, 0))
         end
     end)
 end)
@@ -653,7 +698,6 @@ end)
 -- Respawn
 LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(0.5)
-    hasTeleportedToMap = false
     waitingForCollect = false
     currentTarget = nil
     if not farmActive then applySpeed() end
