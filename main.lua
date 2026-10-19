@@ -1,10 +1,10 @@
 --[[
-    عمو تشريب Hub - Mobile v57 ULTRA ROBUST & FIXED
+    عمو تشريب Hub - Mobile v58 FIXED LOBBY & FALL BUG
     =====================================================
-    - Enhanced Error Handling (Pcall Protection)
-    - 1 Single FakeChar (Stable Collection)
-    - Safe Underground 8 Studs
-    - Adjustable Farm Speed & Custom UI
+    - Fixed Lobby/Between Rounds Falling & Death Loop
+    - Auto Character Reset Cleanup (CharacterAdded)
+    - 1 Single FakeChar & Safe Underground 8 Studs
+    - Adjustable Speed & Realtime Coin Counter (Max 50)
 --]]
 
 local Players = game:GetService("Players")
@@ -46,7 +46,7 @@ task.spawn(function()
     end
 end)
 
--- SAFE COIN FINDER WITH PCALL PROTECTION
+-- SAFE COIN FINDER (Checks if valid round map exists)
 local function getCoins()
     if tick() - lastCacheUpdate < 0.3 then return coinsCache end
     lastCacheUpdate = tick()
@@ -54,8 +54,9 @@ local function getCoins()
     
     pcall(function()
         for _, map in ipairs(workspace:GetChildren()) do
-            if map.Name ~= "Lobby" then
-                local container = map:FindFirstChild("CoinContainer") or map:FindFirstChild("Coins") or map:FindFirstChild("CoinFolder")
+            -- نتأكد أننا لسنا في اللوبي وأن الخريطة تحتوي على عملات حقيقية
+            if map.Name ~= "Lobby" and map:FindFirstChild("CoinContainer") or map:FindFirstChild("Coins") then
+                local container = map:FindFirstChild("CoinContainer") or map:FindFirstChild("Coins")
                 if container then
                     local children = container:GetChildren()
                     for i = 1, #children do
@@ -111,6 +112,28 @@ local function getGameCoinCount()
     return success and count or 0
 end
 
+-- CLEANUP BODY MOVERS ON RESPAWN / DEATH
+local function cleanupPhysics()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if hrp then
+        for _, name in ipairs({"MoveBV", "AntiFall"}) do
+            local m = hrp:FindFirstChild(name)
+            if m then m:Destroy() end
+        end
+    end
+    if hum then
+        hum.PlatformStand = false
+    end
+end
+
+LocalPlayer.CharacterAdded:Connect(function(newChar)
+    task.wait(1)
+    cleanupPhysics()
+end)
+
 -- SINGLE FAKECHAR SYSTEM
 local function destroySingleFake()
     if singleFake and singleFake.Parent then
@@ -152,7 +175,7 @@ local function startSingleFake()
     end)
 end
 
--- MAIN UNDERGROUND LOOP
+-- MAIN UNDERGROUND LOOP WITH LOBBY SAFETY
 RunService.Heartbeat:Connect(function()
     pcall(function()
         if not farmActive or pendingAction then return end
@@ -161,6 +184,14 @@ RunService.Heartbeat:Connect(function()
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         if not hrp or not hum or hum.Health <= 0 then return end
+
+        -- فحص هل نحن في اللوبي أو لا توجد عملات (نهاية القيم)
+        local allCoins = getCoins()
+        if #allCoins == 0 then
+            -- إرجاع الفيزياء لطبيعتها لكي لا يسقط اللاعب في اللوبي
+            cleanupPhysics()
+            return
+        end
 
         hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
         hum.PlatformStand = true
@@ -190,7 +221,7 @@ end)
 
 -- UI INTERFACE SETUP
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AmoChereebUltimateV57"
+ScreenGui.Name = "AmoChereebUltimateV58"
 ScreenGui.Parent = CoreGui
 ScreenGui.ResetOnSpawn = false
 
@@ -237,7 +268,7 @@ local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(1, -50, 1, 0)
 TitleText.Position = UDim2.new(0, 15, 0, 0)
 TitleText.BackgroundTransparency = 1
-TitleText.Text = "⚡ عمو تشريب Hub - v57"
+TitleText.Text = "⚡ عمو تشريب Hub - v58"
 TitleText.TextColor3 = Color3.fromRGB(255, 170, 0)
 TitleText.Font = Enum.Font.GothamBold
 TitleText.TextSize = 15
@@ -346,9 +377,7 @@ createToggle(0, "تجميع العملات تحت الأرض", "🪙", false, fu
         startSingleFake()
     else
         destroySingleFake()
-        local char = LocalPlayer.Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if hum then hum.PlatformStand = false end
+        cleanupPhysics()
     end
 end)
 
