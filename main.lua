@@ -1,9 +1,9 @@
 --[[
-    عمو تشريب Hub - Mobile v67 EXACT SPEED 26 & VALID COIN FILTER
-    ==============================================================
+    عمو تشريب Hub - Mobile v68 EXACT SPEED 30 & ANTI-KICK
+    =======================================================
     - Strict Underground Farming (8 Studs) - Anti-Kick & Valid Coins Only
-    - Calibrated Speed: EXACTLY 26
-    - Advanced Coin Filtering (Stops collecting fake/invalid objects)
+    - Calibrated Speed: EXACTLY 30
+    - Advanced Coin Filtering (Only real active map coins)
     - Live Coin Counter (Max 50) + Custom Icon
 --]]
 
@@ -16,8 +16,8 @@ local CoreGui = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
 
--- CONFIGURATION
-local FARM_SPEED = 26 -- السرعة المضبوطة بدقة على 26
+-- CONFIGURATION (تم ضبط السرعة لتكون 30 كما طلبت بدقة)
+local FARM_SPEED = 30 
 local UNDER_OFFSET = 8
 local COIN_MAX_LIMIT = 50
 
@@ -48,7 +48,7 @@ task.spawn(function()
     end
 end)
 
--- STRICT VALID COIN FILTER (فلترة دقيقة لجمع العملات الحقيقية فقط وعدم جمع أشياء غير موجودة)
+-- STRICT VALID COIN FILTER
 local function getValidCoins()
     if tick() - lastCacheUpdate < 0.1 then return coinsCache end
     lastCacheUpdate = tick()
@@ -62,7 +62,6 @@ local function getValidCoins()
                     local children = container:GetChildren()
                     for i = 1, #children do
                         local coin = children[i]
-                        -- تحقق صارم جداً أن الجزء عبارة عن عملة حقيقية وموجودة وفيزيائية وليست أجزاء وهمية
                         if coin and coin:IsA("BasePart") and coin.Parent and not blacklistedCoins[coin] then
                             if (coin:FindFirstChild("TouchInterest") or coin:FindFirstChildWhichIsA("TouchTransmitter")) or coin.Size.Magnitude < 5 then
                                 table.insert(coinsCache, coin)
@@ -157,7 +156,7 @@ local function triggerUndergroundTouch(coin, char, hrp)
     end)
 end
 
--- MAIN FARM LOOP (EXACT SPEED 26 & VALID FILTER)
+-- MAIN FARM LOOP (EXACT SPEED 30)
 RunService.Heartbeat:Connect(function(dt)
     pcall(function()
         if not farmActive then return end
@@ -197,7 +196,7 @@ RunService.Heartbeat:Connect(function(dt)
                 end
             end
 
-            -- الحركة بالسرعة 26 بالضبط ودون أي تلبورت
+            -- الحركة بالسرعة 30 بدقة تامة وبدون طرد
             local targetPos = Vector3.new(coin.Position.X, coin.Position.Y - UNDER_OFFSET, coin.Position.Z)
             local delta = targetPos - hrp.Position
             local moveStep = math.min(delta.Magnitude, FARM_SPEED * dt)
@@ -218,7 +217,7 @@ end)
 
 -- UI INTERFACE SETUP
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AmoChereebUltimateV67"
+ScreenGui.Name = "AmoChereebUltimateV68"
 ScreenGui.Parent = CoreGui
 ScreenGui.ResetOnSpawn = false
 
@@ -265,7 +264,7 @@ local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(1, -50, 1, 0)
 TitleText.Position = UDim2.new(0, 15, 0, 0)
 TitleText.BackgroundTransparency = 1
-TitleText.Text = "⚡ عمو تشريب Hub - v67"
+TitleText.Text = "⚡ عمو تشريب Hub - v68"
 TitleText.TextColor3 = Color3.fromRGB(255, 170, 0)
 TitleText.Font = Enum.Font.GothamBold
 TitleText.TextSize = 15
@@ -345,51 +344,4 @@ local function createToggle(yPos, text, icon, default, callback)
     txt.Size = UDim2.new(1, -60, 1, 0)
     txt.Position = UDim2.new(0, 15, 0, 0)
     txt.BackgroundTransparency = 1
-    txt.Text = icon .. "  " .. text
-    txt.TextColor3 = Color3.fromRGB(240, 240, 240)
-    txt.Font = Enum.Font.GothamMedium
-    txt.TextSize = 13
-    txt.TextXAlignment = Enum.TextXAlignment.Left
-    txt.Parent = btn
-
-    local statusDot = Instance.new("Frame")
-    statusDot.Size = UDim2.new(0, 12, 0, 12)
-    statusDot.Position = UDim2.new(1, -25, 0.5, -6)
-    statusDot.BackgroundColor3 = default and Color3.fromRGB(80, 220, 100) or Color3.fromRGB(120, 120, 120)
-    statusDot.Parent = btn
-    Instance.new("UICorner", statusDot).CornerRadius = UDim.new(1, 0)
-
-    local state = default
-    btn.MouseButton1Click:Connect(function()
-        state = not state
-        statusDot.BackgroundColor3 = state and Color3.fromRGB(80, 220, 100) or Color3.fromRGB(120, 120, 120)
-        btn.BackgroundColor3 = state and Color3.fromRGB(30, 70, 40) or Color3.fromRGB(25, 25, 35)
-        pcall(callback, state)
-    end)
-end
-
-createToggle(0, "تجميع عملات حقيقية (سرعة 26)", "🪙", false, function(st)
-    farmActive = st
-    if not st then
-        cleanupPhysics()
-    end
-end)
-
-createToggle(55, "فلنج القاتل التلقائي", "🌪️", true, function(st) flingActive = st end)
-createToggle(110, "الحماية والنظام الذكي", "🧠", true, function(st) smartRoleActive = st end)
-
-local isOpen = false
-local function toggleUI()
-    isOpen = not isOpen
-    if isOpen then
-        MainFrame.Visible = true
-        MainFrame:TweenSize(UDim2.new(0, 320, 0, 310), Enum.EasingDirection.Out, Enum.EasingStyle.Back, 0.3, true)
-    else
-        MainFrame:TweenSize(UDim2.new(0, 0, 0, 0), Enum.EasingDirection.In, Enum.EasingStyle.Quad, 0.2, true, function()
-            MainFrame.Visible = false
-        end)
-    end
-end
-
-FloatBtn.MouseButton1Click:Connect(toggleUI)
-CloseBtn.MouseButton1Click:Connect(toggleUI)
+    txt.Text =
