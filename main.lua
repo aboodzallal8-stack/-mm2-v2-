@@ -1,10 +1,10 @@
 --[[
     عمو تشريب Hub - Mobile v73 AUTO RESET AT 50 COINS
     ==================================================
-    - Auto Character Reset when Coins Reach Max (50)
+    - Auto Character Reset when Coins Reach Max (50) (server-validated)
     - Strict Real-Time Validity & Transparency Check (No Ghost Coins)
     - Underground Farm (8 Studs) at Speed 30
-    - Fixed: more robust coin detection so farming works again
+    - Precise collection verification (polls GUI after touch)
 --]]
 
 local Players = game:GetService("Players")
@@ -33,7 +33,7 @@ local flingActive = true
 local smartRoleActive = true
 local antiAFKActive = true
 
-local collectedCoinsCount = 0
+local collectedCoinsCount = 0 -- authoritative, updated from GUI
 local coinsCache = {}
 local lastCacheUpdate = 0
 local currentTargetCoin = nil
@@ -64,135 +64,47 @@ task.spawn(function()
     end
 end)
 
--- ULTRA STRICT REAL & EXISTING COIN CHECK
+-- STRONG COIN VALIDATION
+local function hasTouchTransmitter(part)
+    if not part then return false end
+    if part:FindFirstChildWhichIsA("TouchTransmitter") then return true end
+    if part:FindFirstChild("TouchInterest") then return true end
+    return false
+end
+
+local function looksCoinLike(part)
+    if not part or not part.Name then return false end
+    local name = part.Name:lower()
+    local parentName = (part.Parent and part.Parent.Name or ""):lower()
+    if name:find("coin") or parentName:find("coin") then
+        return true
+    end
+    return false
+end
+
 local function isRealAndExistingCoin(part)
     if not part or not part:IsA("BasePart") then
         return false
     end
-
-    -- reject highly transparent parts
-    if part.Transparency > 0.5 then
+    if not part:IsDescendantOf(workspace) then
         return false
     end
-
-    -- require a touch transmitter (strict)
-    local hasTouch = part:FindFirstChild("TouchInterest") or part:FindFirstChildWhichIsA("TouchTransmitter")
-    if not hasTouch then
+    -- filter out highly transparent or invisible parts
+    if part.Transparency and part.Transparency > 0.5 then
         return false
     end
-
-    local parent = part.Parent
-    if not parent then
-        return false
-    end
-
-    local parentName = parent.Name:lower()
-    if parentName:find("coincontainer") or parentName:find("coins") or part.Name:lower():find("coin") then
+    -- prefer parts that have touch transmitters or coin-like names/parents
+    if hasTouchTransmitter(part) then
         return true
     end
-
+    if looksCoinLike(part) then
+        -- accept looser name-based matches but ensure they are visible and in workspace
+        return true
+    end
     return false
 end
 
--- Helper: looser detection when strict checks miss coins
-local function looksLikeCoinLoosely(part)
-    if not part or not part:IsA("BasePart") then return false end
-    local name = (part.Name or ""):lower()
-    local pName = (part.Parent and part.Parent.Name or ""):lower()
-
-    if name:find("coin") or pName:find("coin") then
-        return true
-    end
-
-    -- accept if has touch transmitter even if names aren't coin-like
-    if part:FindFirstChildWhichIsA("TouchTransmitter") or part:FindFirstChild("TouchInterest") then
-        return true
-    end
-
-    return false
-end
-
-local function getValidCoins()
-    -- throttle cache updates
-    if tick() - lastCacheUpdate < 0.12 then
-        return coinsCache
-    end
-
-    lastCacheUpdate = tick()
-    coinsCache = {}
-
-    local seen = {}
-
-    pcall(function()
-        -- First, try the strict container-based approach (keeps original intent)
-        for _, map in ipairs(workspace:GetChildren()) do
-            if map and map.Name ~= "Lobby" then
-                local container = map:FindFirstChild("CoinContainer") or map:FindFirstChild("Coins")
-                if container then
-                    for _, child in ipairs(container:GetDescendants()) do
-                        if child and child:IsA("BasePart") then
-                            if not seen[child] and not blacklistedCoins[child] and isRealAndExistingCoin(child) then
-                                table.insert(coinsCache, child)
-                                seen[child] = true
-                            end
-                        end
-                    end
-                end
-            end
-        end
-
-        -- If none found by strict rule, fall back to scanning workspace descendants
-        -- but dedupe using 'seen' so we don't add twice
-        if #coinsCache == 0 then
-            for _, obj in ipairs(workspace:GetDescendants()) do
-                if obj and obj:IsA("BasePart") then
-                    if not seen[obj] and not blacklistedCoins[obj] then
-                        -- prefer strict detection, but accept looser heuristics when strict fails
-                        if isRealAndExistingCoin(obj) or looksLikeCoinLoosely(obj) then
-                            table.insert(coinsCache, obj)
-                            seen[obj] = true
-                        end
-                    end
-                end
-            end
-        end
-    end)
-
-    return coinsCache
-end
-
-local function getSmartNearestCoin()
-    local char = LocalPlayer.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp then
-        return nil
-    end
-
-    local allCoins = getValidCoins()
-    if #allCoins == 0 then
-        return nil
-    end
-
-    local closestCoin = nil
-    local shortestDistance = math.huge
-    local hrpPos = hrp.Position
-
-    for _, coin in ipairs(allCoins) do
-        if coin and coin.Parent then
-            -- ignore destroyed or invisible coins
-            if coin.Parent and coin:IsDescendantOf(workspace) then
-                local dist = (hrpPos - coin.Position).Magnitude
-                if dist < shortestDistance then
-                    shortestDistance = dist
-                    closestCoin = coin
-                end
-            end
-        end
-    end
-
-    return closestCoin
-end
-
+-- Read coin count from GUI (authoritative)
 local function getGameCoinCount()
     local success, result = pcall(function()
         local mainGui = LocalPlayer.PlayerGui:FindFirstChild("MainGUI")
@@ -215,23 +127,106 @@ local function getGameCoinCount()
 
         return 0
     end)
-
     return success and result or 0
+end
+
+-- Keep an accurate UI-facing counter (polls GUI often)
+task.spawn(function()
+    while true do
+        local ok, val = pcall(getGameCoinCount)
+        if ok then
+            collectedCoinsCount = val
+        end
+        -- If we reached max and haven't reset yet, reset now (authoritative)
+        if collectedCoinsCount >= COIN_MAX_LIMIT and not hasResetForMax then
+            hasResetForMax = true
+            pcall(function()
+                local char = LocalPlayer.Character
+                if char and char:FindFirstChildOfClass("Humanoid") then
+                    char:FindFirstChildOfClass("Humanoid").Health = 0
+                end
+            end)
+        end
+        task.wait(0.2)
+    end
+end)
+
+-- CACHED coin finder with strict filtering and a fallback
+local function getValidCoins()
+    if tick() - lastCacheUpdate < 0.12 then
+        return coinsCache
+    end
+    lastCacheUpdate = tick()
+    coinsCache = {}
+
+    local seen = {}
+    pcall(function()
+        -- prefer scanning known containers first
+        for _, map in ipairs(workspace:GetChildren()) do
+            if map and map.Name ~= "Lobby" then
+                local container = map:FindFirstChild("CoinContainer") or map:FindFirstChild("Coins")
+                if container then
+                    for _, child in ipairs(container:GetDescendants()) do
+                        if child and child:IsA("BasePart") and not seen[child] and not blacklistedCoins[child] then
+                            if isRealAndExistingCoin(child) then
+                                table.insert(coinsCache, child)
+                                seen[child] = true
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        -- fallback: scan all workspace descendants but require strict checks
+        if #coinsCache == 0 then
+            for _, obj in ipairs(workspace:GetDescendants()) do
+                if obj and obj:IsA("BasePart") and not seen[obj] and not blacklistedCoins[obj] then
+                    if isRealAndExistingCoin(obj) then
+                        table.insert(coinsCache, obj)
+                        seen[obj] = true
+                    end
+                end
+            end
+        end
+    end)
+    return coinsCache
+end
+
+local function getSmartNearestCoin()
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+
+    local allCoins = getValidCoins()
+    if #allCoins == 0 then return nil end
+
+    local closestCoin = nil
+    local shortestDistance = math.huge
+    local hrpPos = hrp.Position
+
+    for _, coin in ipairs(allCoins) do
+        if coin and coin.Parent and coin:IsDescendantOf(workspace) then
+            local dist = (hrpPos - coin.Position).Magnitude
+            if dist < shortestDistance then
+                shortestDistance = dist
+                closestCoin = coin
+            end
+        end
+    end
+    return closestCoin
 end
 
 local function cleanupPhysics()
     pcall(function()
         local char = LocalPlayer.Character
         if not char then return end
-
         local hrp = char:FindFirstChild("HumanoidRootPart")
         local hum = char:FindFirstChildOfClass("Humanoid")
-
         if hrp then
             hrp.AssemblyLinearVelocity = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
         end
-
         if hum then
             hum.PlatformStand = false
         end
@@ -242,19 +237,16 @@ LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
     cleanupPhysics()
     blacklistedCoins = {}
-    hasResetForMax = false -- إعادة تعيين الحالة عند العودة للحياة
+    hasResetForMax = false
     currentTargetCoin = nil
 end)
 
 local function triggerUndergroundTouch(coin, char, hrp)
-    if not coin or not coin.Parent or not hrp then
-        return
-    end
-
-    pcall(function()
+    if not coin or not coin.Parent or not hrp then return false end
+    local ok = pcall(function()
+        -- Touch with HRP and all body parts; smaller delays between calls for reliability
         firetouchinterest(hrp, coin, 0)
         firetouchinterest(hrp, coin, 1)
-
         for _, part in ipairs(char:GetChildren()) do
             if part:IsA("BasePart") then
                 firetouchinterest(part, coin, 0)
@@ -262,16 +254,59 @@ local function triggerUndergroundTouch(coin, char, hrp)
             end
         end
     end)
+    return ok
 end
 
--- FARM LOOP
+-- Attempt to collect a coin and verify server increment; returns true if collection confirmed
+local function attemptCollectCoin(coin, char, hrp)
+    if not coin or not coin.Parent or not char or not hrp then
+        return false
+    end
+
+    -- record coin count before touching
+    local before = getGameCoinCount()
+    -- attempt touch sequence
+    pcall(function()
+        -- do a couple of quick touch attempts with tiny waits for robustness
+        triggerUndergroundTouch(coin, char, hrp)
+        task.wait(0.05)
+        triggerUndergroundTouch(coin, char, hrp)
+    end)
+
+    -- poll GUI for a short window to confirm server-side collection
+    local deadline = tick() + 0.8
+    while tick() < deadline do
+        local now = getGameCoinCount()
+        if now and now > before then
+            -- confirmed collection
+            collectedCoinsCount = now
+            -- if reached limit, reset once
+            if collectedCoinsCount >= COIN_MAX_LIMIT and not hasResetForMax then
+                hasResetForMax = true
+                pcall(function()
+                    local h = char:FindFirstChildOfClass("Humanoid")
+                    if h then h.Health = 0 end
+                end)
+            end
+            return true
+        end
+        task.wait(0.08)
+    end
+
+    -- failed to confirm collection -> treat as ghost coin
+    blacklistedCoins[coin] = true
+    return false
+end
+
+-- MAIN FARM LOOP
 RunService.Heartbeat:Connect(function(dt)
     pcall(function()
         if not farmActive then return end
 
+        -- ensure we keep authoritative count updated
         collectedCoinsCount = getGameCoinCount()
 
-        -- Auto-reset when reach max
+        -- auto-reset if somehow reached limit outside collection sequence
         if collectedCoinsCount >= COIN_MAX_LIMIT and not hasResetForMax then
             hasResetForMax = true
             pcall(function()
@@ -286,10 +321,7 @@ RunService.Heartbeat:Connect(function(dt)
         local char = LocalPlayer.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         local hum = char and char:FindFirstChildOfClass("Humanoid")
-
-        if not hrp or not hum or hum.Health <= 0 then
-            return
-        end
+        if not hrp or not hum or hum.Health <= 0 then return end
 
         local allCoins = getValidCoins()
         if #allCoins == 0 then
@@ -299,7 +331,7 @@ RunService.Heartbeat:Connect(function(dt)
             return
         end
 
-        -- Validate current target (clear it if it's been removed)
+        -- validate current target
         if currentTargetCoin then
             if not currentTargetCoin.Parent or not currentTargetCoin:IsDescendantOf(workspace) then
                 currentTargetCoin = nil
@@ -308,38 +340,36 @@ RunService.Heartbeat:Connect(function(dt)
 
         hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
         hum.PlatformStand = true
-
         for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part.CanCollide = false
-            end
+            if part:IsA("BasePart") then part.CanCollide = false end
         end
 
         local coin = getSmartNearestCoin()
         if coin then
-            -- if coin became invalid, blacklist it
-            if (not coin.Parent) or coin.Transparency > 0.8 then
+            -- skip invalid coin
+            if not coin.Parent or not coin:IsDescendantOf(workspace) or coin.Transparency > 0.8 then
                 blacklistedCoins[coin] = true
                 currentTargetCoin = nil
                 return
             end
 
+            -- start tracking a new target
             if coin ~= currentTargetCoin then
                 currentTargetCoin = coin
                 coinTargetStartTime = tick()
             else
-                if tick() - coinTargetStartTime > 0.6 then
-                    -- took too long, blacklist and pick a new coin next frame
+                -- if stuck too long on same coin, blacklist and move on
+                if tick() - coinTargetStartTime > 0.8 then
                     blacklistedCoins[coin] = true
                     currentTargetCoin = nil
                     return
                 end
             end
 
+            -- move under the coin smoothly (underground)
             local targetPos = Vector3.new(coin.Position.X, coin.Position.Y - UNDER_OFFSET, coin.Position.Z)
             local delta = targetPos - hrp.Position
             local moveStep = math.min(delta.Magnitude, FARM_SPEED * dt)
-
             if delta.Magnitude > 0.05 then
                 hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * moveStep)
             else
@@ -349,12 +379,25 @@ RunService.Heartbeat:Connect(function(dt)
             hrp.AssemblyLinearVelocity = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
 
-            triggerUndergroundTouch(coin, char, hrp)
+            -- only attempt collection when very close vertically/horizontally
+            if (hrp.Position - Vector3.new(coin.Position.X, hrp.Position.Y, coin.Position.Z)).Magnitude <= 1.5 then
+                local collected = attemptCollectCoin(coin, char, hrp)
+                if collected then
+                    -- successful: clear blacklist for this coin (it may be removed server-side)
+                    blacklistedCoins[coin] = nil
+                    currentTargetCoin = nil
+                    return
+                else
+                    -- failed: coin already blacklisted inside attemptCollectCoin
+                    currentTargetCoin = nil
+                    return
+                end
+            end
         end
     end)
 end)
 
--- UI
+-- UI (keeps showing authoritative collectedCoinsCount)
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "AmoChereebUltimateV73"
 ScreenGui.ResetOnSpawn = false
@@ -452,15 +495,16 @@ ProgressBarFill.BackgroundColor3 = Color3.fromRGB(255, 170, 0)
 ProgressBarFill.Parent = ProgressBarBG
 Instance.new("UICorner", ProgressBarFill).CornerRadius = UDim.new(1, 0)
 
+-- UI updater: reads authoritative collectedCoinsCount
 task.spawn(function()
     while true do
         pcall(function()
-            local count = math.min(collectedCoinsCount, COIN_MAX_LIMIT)
+            local count = math.min(collectedCoinsCount or 0, COIN_MAX_LIMIT)
             CoinLabel.Text = "العملات المجمعة: " .. tostring(count) .. " / " .. tostring(COIN_MAX_LIMIT) .. " 🪙"
             local percent = math.clamp(count / COIN_MAX_LIMIT, 0, 1)
-            TweenService:Create(ProgressBarFill, TweenInfo.new(0.2), {Size = UDim2.new(percent, 0, 1, 0)}):Play()
+            TweenService:Create(ProgressBarFill, TweenInfo.new(0.18), {Size = UDim2.new(percent, 0, 1, 0)}):Play()
         end)
-        task.wait(0.2)
+        task.wait(0.18)
     end
 end)
 
@@ -509,9 +553,7 @@ end
 
 createToggle(0, "تجميع تحت الأرض (سرعة 30)", "🪙", false, function(st)
     farmActive = st
-    if not st then
-        cleanupPhysics()
-    end
+    if not st then cleanupPhysics() end
 end)
 
 createToggle(55, "فلنج القاتل التلقائي", "🌪️", true, function(st) flingActive = st end)
