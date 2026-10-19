@@ -1,14 +1,14 @@
 --[[
-    عمو تشريب Hub - Mobile v23 ALL ROLES
-    ======================================
-    - Works for Murderer / Sheriff / Innocent
-    - No isInRound() - uses coin count + internal counter
-    - Reset at 50 internal counter (or UI)
+    عمو تشريب Hub - Mobile v24 COLLECTION FIXED
+    ============================================
+    - Fly (Stepped) + Collect (Heartbeat) - separate
+    - PlatformStand OFF during collection
+    - HRP directly ON coin
+    - firetouchinterest from all parts
 --]]
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local VirtualUser = game:GetService("VirtualUser")
 local CoreGui = game:GetService("CoreGui")
 
@@ -20,7 +20,7 @@ local LocalPlayer = Players.LocalPlayer
 local walkSpeed = 27
 local FLY_SPEED = 27
 local HOVER_HEIGHT = 3
-local COIN_TIMEOUT = 3
+local COLLECT_RADIUS = 6
 local COIN_LIMIT = 50
 
 -- ═══════════════════════════════════════
@@ -34,11 +34,9 @@ local lastResetTime = 0
 local stuckCoins = {}
 local firstTeleportDone = false
 local cachedMurderer = nil
-
--- ═══ Internal counter (works for all roles) ═══
 local collectedCoins = 0
 local lastCoinCount = 0
-local lastRoundCheckTime = 0
+local currentCoin = nil  -- الكوين الحالي اللي نحاول نجمعه
 
 -- ═══════════════════════════════════════
 -- ANTI-AFK
@@ -56,7 +54,7 @@ task.spawn(function()
 end)
 
 -- ═══════════════════════════════════════
--- MURDERER SCAN (fast - 0.3s)
+-- MURDERER SCAN
 -- ═══════════════════════════════════════
 local function scanMurdererFast()
     for _, player in ipairs(Players:GetPlayers()) do
@@ -77,13 +75,6 @@ local function scanMurdererFast()
             end
         end
     end
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player == LocalPlayer then continue end
-        for _, attr in ipairs({"Role", "role", "GameRole"}) do
-            local r = player:GetAttribute(attr)
-            if r and tostring(r):lower():find("murder") then return player end
-        end
-    end
     return nil
 end
 
@@ -95,13 +86,11 @@ task.spawn(function()
 end)
 
 -- ═══════════════════════════════════════
--- FLING (every frame, cached murderer)
+-- FLING
 -- ═══════════════════════════════════════
 RunService.Heartbeat:Connect(function()
     if not flingActive or pendingRespawn then return end
-    if not cachedMurderer then return end
-    -- Don't fling yourself!
-    if cachedMurderer == LocalPlayer then return end
+    if not cachedMurderer or cachedMurderer == LocalPlayer then return end
 
     local char = cachedMurderer.Character
     if not char then return end
@@ -118,7 +107,6 @@ RunService.Heartbeat:Connect(function()
             500000,
             math.random(-500, 500)
         )
-        hrp.Velocity = Vector3.new(0, 500000, 0)
     end)
 end)
 
@@ -223,10 +211,11 @@ local function doAutoRespawn()
     firstTeleportDone = false
     collectedCoins = 0
     lastCoinCount = 0
+    currentCoin = nil
 end
 
 -- ═══════════════════════════════════════
--- FARM LOOP (works for ALL roles)
+-- FLY LOOP (Stepped - physics before)
 -- ═══════════════════════════════════════
 RunService.Stepped:Connect(function()
     pcall(function()
@@ -237,43 +226,55 @@ RunService.Stepped:Connect(function()
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         if not hrp or not hum or hum.Health <= 0 then return end
 
-        -- ═══ Count coins (detect new round) ═══
+        -- Count coins (detect new round)
         local coins = getAllCoins()
         local currentCount = #coins
-
-        -- Detect collection: coins decreased
         if lastCoinCount > currentCount and lastCoinCount > 0 then
-            local diff = lastCoinCount - currentCount
-            collectedCoins = collectedCoins + diff
-            print("[COLLECT] +" .. diff .. " = " .. collectedCoins)
+            collectedCoins = collectedCoins + (lastCoinCount - currentCount)
+            print("[COLLECT] Total: " .. collectedCoins)
         end
-
-        -- Detect new round (coins respawned from 0)
         if lastCoinCount == 0 and currentCount > 5 then
             collectedCoins = 0
             firstTeleportDone = false
             stuckCoins = {}
         end
-
         lastCoinCount = currentCount
 
-        -- ═══ Reset check ═══
+        -- Reset check
         if collectedCoins >= COIN_LIMIT then
             doAutoRespawn()
             return
         end
-
-        -- Also check UI (for innocent/sheriff)
         local uiCur, uiMax = getUICoinCount()
         if uiMax >= 40 and uiCur >= uiMax then
             doAutoRespawn()
             return
         end
 
-        -- ═══ No coins? wait ═══
         if currentCount == 0 then return end
 
-        -- ═══ Force fly state ═══
+        -- Find coin
+        local coin, dist = getNearestCoin()
+        if not coin then return end
+        currentCoin = coin
+
+        -- Teleport first time
+        if not firstTeleportDone then
+            hrp.CFrame = CFrame.new(coin.Position + Vector3.new(0, HOVER_HEIGHT, 0))
+            hrp.Velocity = Vector3.zero
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            firstTeleportDone = true
+            return
+        end
+
+        -- Recovery if fell
+        if hrp.Position.Y < -50 then
+            hrp.CFrame = CFrame.new(coin.Position + Vector3.new(0, HOVER_HEIGHT, 0))
+            hrp.Velocity = Vector3.zero
+            return
+        end
+
+        -- FLY towards coin
         hum.PlatformStand = true
         hum.WalkSpeed = 0
         hum.JumpPower = 0
@@ -286,65 +287,77 @@ RunService.Stepped:Connect(function()
         end
         hrp.CanCollide = true
 
-        -- ═══ Find nearest coin ═══
-        local coin, dist = getNearestCoin()
-        if not coin then return end
-
-        -- ═══ Teleport to first coin ═══
-        if not firstTeleportDone then
-            hrp.CFrame = CFrame.new(coin.Position + Vector3.new(0, HOVER_HEIGHT, 0))
-            hrp.Velocity = Vector3.zero
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            firstTeleportDone = true
-            return
-        end
-
-        -- ═══ Recovery if fell ═══
-        if hrp.Position.Y < -50 then
-            hrp.CFrame = CFrame.new(coin.Position + Vector3.new(0, HOVER_HEIGHT, 0))
-            hrp.Velocity = Vector3.zero
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            return
-        end
-
-        -- ═══ Fly towards coin ═══
         local target = coin.Position + Vector3.new(0, HOVER_HEIGHT, 0)
         local delta = target - hrp.Position
-        if delta.Magnitude > 1 then
+        if delta.Magnitude > 0.5 then
             local step = math.min(FLY_SPEED / 60, delta.Magnitude)
             hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * step)
         end
+        hrp.Velocity = Vector3.zero
+        hrp.AssemblyLinearVelocity = Vector3.zero
+    end)
+end)
 
+-- ═══════════════════════════════════════
+-- COLLECT LOOP (Heartbeat - after physics)
+-- ═══════════════════════════════════════
+RunService.Heartbeat:Connect(function()
+    pcall(function()
+        if not farmActive or pendingRespawn then return end
+
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not hrp or not hum or hum.Health <= 0 then return end
+
+        local coin = currentCoin
+        if not coin or not coin.Parent or not coin:IsDescendantOf(workspace) then return end
+
+        local dist = (hrp.Position - coin.Position).Magnitude
+        if dist > COLLECT_RADIUS then return end
+
+        -- ═══ FORCE COLLECT ═══
+        -- Turn OFF PlatformStand so touch works
+        hum.PlatformStand = false
+        hum.WalkSpeed = 0
+        hum.JumpPower = 0
+
+        -- Position HRP directly ON coin (not above)
+        hrp.CFrame = CFrame.new(coin.Position)
         hrp.Velocity = Vector3.zero
         hrp.AssemblyLinearVelocity = Vector3.zero
 
-        -- ═══ Collect ═══
-        if dist < 7 then
-            for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") then
-                    pcall(function()
-                        firetouchinterest(part, coin, 0)
-                        firetouchinterest(part, coin, 1)
-                    end)
-                end
-            end
+        -- Fire touch from HRP
+        pcall(function()
+            firetouchinterest(hrp, coin, 0)
+            firetouchinterest(hrp, coin, 1)
+        end)
 
-            if not stuckCoins[coin] then
-                stuckCoins[coin] = tick()
-            elseif type(stuckCoins[coin]) == "number" and tick() - stuckCoins[coin] > COIN_TIMEOUT then
-                stuckCoins[coin] = true
+        -- Fire touch from every body part
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") and part ~= hrp then
+                pcall(function()
+                    firetouchinterest(part, coin, 0)
+                    firetouchinterest(part, coin, 1)
+                end)
             end
+        end
+
+        -- Track stuck coin
+        if not stuckCoins[coin] then
+            stuckCoins[coin] = tick()
+        elseif type(stuckCoins[coin]) == "number" and tick() - stuckCoins[coin] > 2 then
+            stuckCoins[coin] = true
         end
     end)
 end)
 
 -- ═══════════════════════════════════════
--- Coin info display
+-- Coin info
 -- ═══════════════════════════════════════
 local function updateCoinInfo()
     local uiCur, uiMax = getUICoinCount()
     local mapCount = #getAllCoins()
-    -- Show internal counter if UI not available
     local displayCount = uiCur > 0 and uiCur or collectedCoins
     local displayMax = uiMax > 0 and uiMax or COIN_LIMIT
     CoinInfo.Text = "🪙 " .. displayCount .. " / " .. displayMax .. "  •  بالخريطة: " .. mapCount
@@ -355,7 +368,7 @@ RunService.Heartbeat:Connect(function()
 end)
 
 -- ═══════════════════════════════════════
--- GUI (same as before)
+-- GUI
 -- ═══════════════════════════════════════
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "AmoChereebMobile"
@@ -564,6 +577,7 @@ local FarmBtn = makeToggle(100, "طيران + جمع", "✈️", false, function
     if state then
         firstTeleportDone = false
         stuckCoins = {}
+        currentCoin = nil
     else
         local char = LocalPlayer.Character
         if char then
@@ -576,6 +590,7 @@ local FarmBtn = makeToggle(100, "طيران + جمع", "✈️", false, function
                 if part:IsA("BasePart") then part.CanCollide = true end
             end
         end
+        currentCoin = nil
     end
 end)
 
@@ -638,10 +653,10 @@ FloatBtn.InputEnded:Connect(function(input)
     end
 end)
 
--- Respawn
 LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(0.5)
     firstTeleportDone = false
+    currentCoin = nil
     if not farmActive then
         local hum = char:FindFirstChildOfClass("Humanoid")
         if hum then hum.WalkSpeed = 16 end
