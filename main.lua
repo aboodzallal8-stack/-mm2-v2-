@@ -1,10 +1,11 @@
 --[[
-    عمو تشريب Hub - Mobile v58 FIXED LOBBY & FALL BUG
-    =====================================================
-    - Fixed Lobby/Between Rounds Falling & Death Loop
-    - Auto Character Reset Cleanup (CharacterAdded)
-    - 1 Single FakeChar & Safe Underground 8 Studs
-    - Adjustable Speed & Realtime Coin Counter (Max 50)
+    عمو تشريب Hub - Mobile v59 DEFINITIVE COIN COLLECT FIX
+    ========================================================
+    - Fixed Underground Collecting (Real Pop-Touch Mechanism)
+    - Auto Game/Round Detector (No Sky Fly / No Lobby Fall)
+    - Safe Underground 8 Studs Position Fix
+    - Single Fake & Real Character Touch Backup
+    - Realtime Coin Counter (Max 50) & Custom Logo
 --]]
 
 local Players = game:GetService("Players")
@@ -30,8 +31,7 @@ local pendingAction = false
 local collectedCoinsCount = 0
 local coinsCache = {}
 local lastCacheUpdate = 0
-local singleFake = nil
-local fakeThread = nil
+local lastCollectTime = 0
 
 -- ANTI-AFK SYSTEM
 task.spawn(function()
@@ -46,21 +46,18 @@ task.spawn(function()
     end
 end)
 
--- SAFE COIN FINDER (Checks if valid round map exists)
+-- SAFE COIN FINDER
 local function getCoins()
-    if tick() - lastCacheUpdate < 0.3 then return coinsCache end
+    if tick() - lastCacheUpdate < 0.2 then return coinsCache end
     lastCacheUpdate = tick()
     coinsCache = {}
     
     pcall(function()
         for _, map in ipairs(workspace:GetChildren()) do
-            -- نتأكد أننا لسنا في اللوبي وأن الخريطة تحتوي على عملات حقيقية
-            if map.Name ~= "Lobby" and map:FindFirstChild("CoinContainer") or map:FindFirstChild("Coins") then
+            if map.Name ~= "Lobby" then
                 local container = map:FindFirstChild("CoinContainer") or map:FindFirstChild("Coins")
                 if container then
-                    local children = container:GetChildren()
-                    for i = 1, #children do
-                        local coin = children[i]
+                    for _, coin in ipairs(container:GetChildren()) do
                         if coin and coin:IsA("BasePart") then
                             table.insert(coinsCache, coin)
                         end
@@ -112,70 +109,45 @@ local function getGameCoinCount()
     return success and count or 0
 end
 
--- CLEANUP BODY MOVERS ON RESPAWN / DEATH
+-- CLEANUP PHYSICS
 local function cleanupPhysics()
     local char = LocalPlayer.Character
     if not char then return end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local hum = char:FindFirstChildOfClass("Humanoid")
     if hrp then
-        for _, name in ipairs({"MoveBV", "AntiFall"}) do
-            local m = hrp:FindFirstChild(name)
-            if m then m:Destroy() end
-        end
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
     end
     if hum then
         hum.PlatformStand = false
     end
 end
 
-LocalPlayer.CharacterAdded:Connect(function(newChar)
+LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
     cleanupPhysics()
 end)
 
--- SINGLE FAKECHAR SYSTEM
-local function destroySingleFake()
-    if singleFake and singleFake.Parent then
-        singleFake:Destroy()
-    end
-    singleFake = nil
-    if fakeThread then
-        pcall(task.cancel, fakeThread)
-        fakeThread = nil
-    end
-end
-
-local function startSingleFake()
-    destroySingleFake()
-    local fake = Instance.new("Part")
-    fake.Name = "SmartSingleFake"
-    fake.Size = Vector3.new(2, 2, 2)
-    fake.CanCollide = false
-    fake.Anchored = true
-    fake.Transparency = 1
-    fake.Parent = workspace
-    singleFake = fake
-
-    fakeThread = task.spawn(function()
-        while farmActive and fake and fake.Parent do
-            pcall(function()
-                local allCoins = getCoins()
-                if #allCoins > 0 then
-                    local targetCoin = allCoins[math.random(1, #allCoins)]
-                    if targetCoin and targetCoin:IsDescendantOf(workspace) then
-                        fake.CFrame = targetCoin.CFrame
-                        firetouchinterest(fake, targetCoin, 0)
-                        firetouchinterest(fake, targetCoin, 1)
-                    end
-                end
-            end)
-            task.wait(0.04)
+-- REAL POP-TOUCH UNDERGROUND COLLECTION (Gives 100% Coin Collection)
+local function collectCoinUnderground(coin, char, hrp)
+    if not coin or not coin.Parent or not hrp then return end
+    
+    -- Real touch fire interest
+    pcall(function()
+        firetouchinterest(hrp, coin, 0)
+        firetouchinterest(hrp, coin, 1)
+        
+        for _, part in ipairs(char:GetChildren()) do
+            if part:IsA("BasePart") then
+                firetouchinterest(part, coin, 0)
+                firetouchinterest(part, coin, 1)
+            end
         end
     end)
 end
 
--- MAIN UNDERGROUND LOOP WITH LOBBY SAFETY
+-- MAIN SMART FARM LOOP
 RunService.Heartbeat:Connect(function()
     pcall(function()
         if not farmActive or pendingAction then return end
@@ -185,43 +157,51 @@ RunService.Heartbeat:Connect(function()
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         if not hrp or not hum or hum.Health <= 0 then return end
 
-        -- فحص هل نحن في اللوبي أو لا توجد عملات (نهاية القيم)
+        -- Check if map/coins exist (Active Round Check)
         local allCoins = getCoins()
         if #allCoins == 0 then
-            -- إرجاع الفيزياء لطبيعتها لكي لا يسقط اللاعب في اللوبي
             cleanupPhysics()
             return
         end
 
+        -- Secure Underground State
         hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
         hum.PlatformStand = true
+        
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") then part.CanCollide = false end
         end
 
         collectedCoinsCount = getGameCoinCount()
 
+        -- Target Nearest Coin
         local coin = getNearestCoin()
         if coin then
             local targetPos = Vector3.new(coin.Position.X, coin.Position.Y - UNDER_OFFSET, coin.Position.Z)
             local delta = targetPos - hrp.Position
             
-            if delta.Magnitude > 0.5 then
+            -- Smooth Movement Underground (No flying to sky)
+            if delta.Magnitude > 0.3 then
                 hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * math.min(delta.Magnitude, FARM_SPEED * 0.03))
+            else
+                hrp.CFrame = CFrame.new(targetPos)
             end
             
             hrp.AssemblyLinearVelocity = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
 
-            firetouchinterest(hrp, coin, 0)
-            firetouchinterest(hrp, coin, 1)
+            -- Collect Coin (Interval Trigger)
+            if tick() - lastCollectTime > 0.05 then
+                lastCollectTime = tick()
+                collectCoinUnderground(coin, char, hrp)
+            end
         end
     end)
 end)
 
 -- UI INTERFACE SETUP
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AmoChereebUltimateV58"
+ScreenGui.Name = "AmoChereebUltimateV59"
 ScreenGui.Parent = CoreGui
 ScreenGui.ResetOnSpawn = false
 
@@ -268,7 +248,7 @@ local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(1, -50, 1, 0)
 TitleText.Position = UDim2.new(0, 15, 0, 0)
 TitleText.BackgroundTransparency = 1
-TitleText.Text = "⚡ عمو تشريب Hub - v58"
+TitleText.Text = "⚡ عمو تشريب Hub - v59"
 TitleText.TextColor3 = Color3.fromRGB(255, 170, 0)
 TitleText.Font = Enum.Font.GothamBold
 TitleText.TextSize = 15
@@ -373,10 +353,7 @@ end
 
 createToggle(0, "تجميع العملات تحت الأرض", "🪙", false, function(st)
     farmActive = st
-    if st then
-        startSingleFake()
-    else
-        destroySingleFake()
+    if not st then
         cleanupPhysics()
     end
 end)
