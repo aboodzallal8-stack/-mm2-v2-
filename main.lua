@@ -1,10 +1,9 @@
 --[[
-    عمو تشريب Hub - Mobile v42 TELEPORT-FIRST
-    ===========================================
-    - Instant teleport to first coin (once per round)
-    - Underground fly (20 studs below)
-    - Continuous collect (no stop)
-    - Kill All button
+    عمو تشريب Hub - Mobile v43 REAL COLLECT
+    =========================================
+    - Character stays underground (safe)
+    - Pops up for 1 frame to collect (invisible)
+    - Continuous collection (no stop)
 --]]
 
 local Players = game:GetService("Players")
@@ -53,7 +52,7 @@ local sheriffKillInProgress = false
 local activelyFlinging = {}
 local escapeTarget = nil
 local escapeUntil = 0
-local firstTeleportDone = false  -- ✅ جديد
+local firstTeleportDone = false
 
 local phase = "idle"
 local scanStart = 0
@@ -399,38 +398,27 @@ local function getUICoinCount()
 end
 
 -- ═══════════════════════════════════════
--- INSTANT COLLECT (dummy part)
+-- ✅ NEW COLLECT: pop up for 1 frame
 -- ═══════════════════════════════════════
 local function collectCoin(coin, char, hrp)
     if not coin or not coin.Parent or not coin:IsDescendantOf(workspace) then return end
-    if not char then return end
+    if not char or not hrp then return end
 
-    local dummy = Instance.new("Part")
-    dummy.Name = "FC"
-    dummy.Size = Vector3.new(8, 8, 8)
-    dummy.CanCollide = false
-    dummy.CanTouch = true
-    dummy.CanQuery = false
-    dummy.Transparency = 1
-    dummy.Massless = true
-    dummy.Anchored = true
-    dummy.CFrame = coin.CFrame
-    dummy.Parent = char
+    local undergroundCF = hrp.CFrame
 
+    -- رفع HRP لفوق الكوين (فريم واحد)
+    hrp.CFrame = CFrame.new(coin.Position + Vector3.new(0, 0.5, 0))
+    hrp.Velocity = Vector3.zero
+    hrp.AssemblyLinearVelocity = Vector3.zero
+
+    -- touch من كل الأجزاء
     pcall(function()
-        firetouchinterest(dummy, coin, 0)
-        firetouchinterest(dummy, coin, 1)
+        firetouchinterest(hrp, coin, 0)
+        firetouchinterest(hrp, coin, 1)
     end)
 
-    if hrp then
-        pcall(function()
-            firetouchinterest(hrp, coin, 0)
-            firetouchinterest(hrp, coin, 1)
-        end)
-    end
-
     for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA("BasePart") and part ~= dummy and part ~= hrp then
+        if part:IsA("BasePart") and part ~= hrp then
             pcall(function()
                 firetouchinterest(part, coin, 0)
                 firetouchinterest(part, coin, 1)
@@ -438,9 +426,10 @@ local function collectCoin(coin, char, hrp)
         end
     end
 
-    task.delay(0.1, function()
-        if dummy and dummy.Parent then dummy:Destroy() end
-    end)
+    -- رجوع تحت الأرض
+    hrp.CFrame = undergroundCF
+    hrp.Velocity = Vector3.zero
+    hrp.AssemblyLinearVelocity = Vector3.zero
 end
 
 -- ═══════════════════════════════════════
@@ -492,7 +481,7 @@ local function handle50Coins()
 end
 
 -- ═══════════════════════════════════════
--- FARM LOOP (TELEPORT FIRST + UNDERGROUND + CONTINUOUS COLLECT)
+-- FARM LOOP
 -- ═══════════════════════════════════════
 RunService.Heartbeat:Connect(function()
     pcall(function()
@@ -524,7 +513,7 @@ RunService.Heartbeat:Connect(function()
 
         if phase ~= "farming" then return end
 
-        -- ✅ TELEPORT TO FIRST COIN (once per round)
+        -- Teleport first coin
         if not firstTeleportDone then
             local firstCoin = getNearestCoin()
             if firstCoin then
@@ -543,12 +532,11 @@ RunService.Heartbeat:Connect(function()
                 currentCoin = firstCoin
                 coinStartTime = tick()
                 firstTeleportDone = true
-                print("[TELEPORT] First coin reached")
             end
             return
         end
 
-        -- Lobby check
+        -- Lobby
         local allCoins = getAllCoins()
         if #allCoins == 0 then
             phase = "scanning"
@@ -588,7 +576,7 @@ RunService.Heartbeat:Connect(function()
             end
         end
 
-        -- True fly mode
+        -- True fly
         hum.PlatformStand = true
         hum.WalkSpeed = 0
         hum.JumpPower = 0
@@ -596,7 +584,6 @@ RunService.Heartbeat:Connect(function()
         hum.AutoRotate = false
         pcall(function() hum:ChangeState(Enum.HumanoidStateType.Physics) end)
 
-        -- Stop walk animations
         pcall(function()
             local animator = hum:FindFirstChildOfClass("Animator")
             if animator then
@@ -610,14 +597,13 @@ RunService.Heartbeat:Connect(function()
             end
         end)
 
-        -- Noclip
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") then
                 if part.CanCollide then part.CanCollide = false end
             end
         end
 
-        -- Instant collect (every 0.1s)
+        -- Collect (every 0.1s) - pops up and back
         if tick() - lastCollectTime > COLLECT_INTERVAL then
             lastCollectTime = tick()
             local nearby = getCoinsInRange(hrp.Position, COLLECT_RANGE, COLLECT_PER_BATCH)
@@ -673,7 +659,7 @@ RunService.Heartbeat:Connect(function()
 end)
 
 -- ═══════════════════════════════════════
--- GUI
+-- GUI (نفس الكود القديم)
 -- ═══════════════════════════════════════
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "AmoChereebMobile"
