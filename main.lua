@@ -4,6 +4,7 @@
     - Auto Character Reset when Coins Reach Max (50)
     - Strict Real-Time Validity & Transparency Check (No Ghost Coins)
     - Underground Farm (8 Studs) at Speed 30
+    - Fixed: more robust coin detection so farming works again
 --]]
 
 local Players = game:GetService("Players")
@@ -69,10 +70,12 @@ local function isRealAndExistingCoin(part)
         return false
     end
 
+    -- reject highly transparent parts
     if part.Transparency > 0.5 then
         return false
     end
 
+    -- require a touch transmitter (strict)
     local hasTouch = part:FindFirstChild("TouchInterest") or part:FindFirstChildWhichIsA("TouchTransmitter")
     if not hasTouch then
         return false
@@ -91,8 +94,27 @@ local function isRealAndExistingCoin(part)
     return false
 end
 
+-- Helper: looser detection when strict checks miss coins
+local function looksLikeCoinLoosely(part)
+    if not part or not part:IsA("BasePart") then return false end
+    local name = (part.Name or ""):lower()
+    local pName = (part.Parent and part.Parent.Name or ""):lower()
+
+    if name:find("coin") or pName:find("coin") then
+        return true
+    end
+
+    -- accept if has touch transmitter even if names aren't coin-like
+    if part:FindFirstChildWhichIsA("TouchTransmitter") or part:FindFirstChild("TouchInterest") then
+        return true
+    end
+
+    return false
+end
+
 local function getValidCoins()
-    if tick() - lastCacheUpdate < 0.1 then
+    -- throttle cache updates
+    if tick() - lastCacheUpdate < 0.12 then
         return coinsCache
     end
 
@@ -102,6 +124,7 @@ local function getValidCoins()
     local seen = {}
 
     pcall(function()
+        -- First, try the strict container-based approach (keeps original intent)
         for _, map in ipairs(workspace:GetChildren()) do
             if map and map.Name ~= "Lobby" then
                 local container = map:FindFirstChild("CoinContainer") or map:FindFirstChild("Coins")
@@ -112,6 +135,22 @@ local function getValidCoins()
                                 table.insert(coinsCache, child)
                                 seen[child] = true
                             end
+                        end
+                    end
+                end
+            end
+        end
+
+        -- If none found by strict rule, fall back to scanning workspace descendants
+        -- but dedupe using 'seen' so we don't add twice
+        if #coinsCache == 0 then
+            for _, obj in ipairs(workspace:GetDescendants()) do
+                if obj and obj:IsA("BasePart") then
+                    if not seen[obj] and not blacklistedCoins[obj] then
+                        -- prefer strict detection, but accept looser heuristics when strict fails
+                        if isRealAndExistingCoin(obj) or looksLikeCoinLoosely(obj) then
+                            table.insert(coinsCache, obj)
+                            seen[obj] = true
                         end
                     end
                 end
@@ -139,11 +178,14 @@ local function getSmartNearestCoin()
     local hrpPos = hrp.Position
 
     for _, coin in ipairs(allCoins) do
-        if coin and coin.Parent and coin.Parent ~= nil then
-            local dist = (hrpPos - coin.Position).Magnitude
-            if dist < shortestDistance then
-                shortestDistance = dist
-                closestCoin = coin
+        if coin and coin.Parent then
+            -- ignore destroyed or invisible coins
+            if coin.Parent and coin:IsDescendantOf(workspace) then
+                local dist = (hrpPos - coin.Position).Magnitude
+                if dist < shortestDistance then
+                    shortestDistance = dist
+                    closestCoin = coin
+                end
             end
         end
     end
@@ -201,6 +243,7 @@ LocalPlayer.CharacterAdded:Connect(function()
     cleanupPhysics()
     blacklistedCoins = {}
     hasResetForMax = false -- إعادة تعيين الحالة عند العودة للحياة
+    currentTargetCoin = nil
 end)
 
 local function triggerUndergroundTouch(coin, char, hrp)
@@ -228,7 +271,7 @@ RunService.Heartbeat:Connect(function(dt)
 
         collectedCoinsCount = getGameCoinCount()
 
-        -- فحص هل وصل الحد الأقصى 50 لعمل ريست تلقائي للشخصية
+        -- Auto-reset when reach max
         if collectedCoinsCount >= COIN_MAX_LIMIT and not hasResetForMax then
             hasResetForMax = true
             pcall(function()
@@ -256,6 +299,13 @@ RunService.Heartbeat:Connect(function(dt)
             return
         end
 
+        -- Validate current target (clear it if it's been removed)
+        if currentTargetCoin then
+            if not currentTargetCoin.Parent or not currentTargetCoin:IsDescendantOf(workspace) then
+                currentTargetCoin = nil
+            end
+        end
+
         hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
         hum.PlatformStand = true
 
@@ -267,7 +317,8 @@ RunService.Heartbeat:Connect(function(dt)
 
         local coin = getSmartNearestCoin()
         if coin then
-            if not coin.Parent or coin.Transparency > 0.5 then
+            -- if coin became invalid, blacklist it
+            if (not coin.Parent) or coin.Transparency > 0.8 then
                 blacklistedCoins[coin] = true
                 currentTargetCoin = nil
                 return
@@ -277,7 +328,8 @@ RunService.Heartbeat:Connect(function(dt)
                 currentTargetCoin = coin
                 coinTargetStartTime = tick()
             else
-                if tick() - coinTargetStartTime > 0.4 then
+                if tick() - coinTargetStartTime > 0.6 then
+                    -- took too long, blacklist and pick a new coin next frame
                     blacklistedCoins[coin] = true
                     currentTargetCoin = nil
                     return
