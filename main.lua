@@ -1,11 +1,10 @@
 --[[
-    عمو تشريب Hub - Mobile v10 (SMART)
-    - Teleport once to map, then fly
-    - Stops ABOVE coins (not below)
-    - Smart dual fling:
-        * On server join -> fling murderer (once per session)
-        * On 50 coins -> fling murderer
-        * Won't fling same murderer twice in one round
+    عمو تشريب Hub - Mobile v11 (FIXED COIN COUNT)
+    - Teleport ONCE to first coin (map)
+    - Fly to remaining coins
+    - STOP at each coin, wait for it to disappear (proper collection)
+    - Stand ABOVE coin (not underground)
+    - Smart murderer fling (auto + at 50)
 --]]
 
 local Players = game:GetService("Players")
@@ -19,11 +18,9 @@ local LocalPlayer = Players.LocalPlayer
 
 -- ========== Config ==========
 local walkSpeed = 27
-local FLY_SPEED_NEAR = 55
-local FLY_SPEED_MID = 110
-local FLY_SPEED_FAR = 200
-local TELEPORT_THRESHOLD = 80 -- لو أبعد من كذا → تيليبورت للماب
-local COIN_OFFSET_Y = 2 -- ارتفاع فوق الكوين
+local FLY_SPEED = 180
+local TELEPORT_THRESHOLD = 60 -- لو أبعد من كذا → تيليبورت مرة واحدة
+local COIN_STAND_HEIGHT = 3 -- يقف 3 ستود فوق الكوين (ما ينزل تحت)
 
 -- ========== States ==========
 local farmActive = false
@@ -31,7 +28,12 @@ local flingMurdererActive = false
 local antiAFKActive = true
 local pendingRespawn = false
 local hasTeleportedToMap = false
-local flingedMurderers = {} -- تتبع القتلة اللي تم فلنكهم في هذي الجولة
+local flingedMurderers = {}
+local currentTarget = nil
+local waitingForCollect = false
+local collectStartTime = 0
+local coinsCollectedThisRound = 0
+local lastSeenCoinCount = -1
 
 -- ========== Anti-AFK ==========
 task.spawn(function()
@@ -97,7 +99,7 @@ local function killPlayer(targetPlayer)
     return true
 end
 
--- ========== Smart Murderer Fling (auto-detect, once per murderer per round) ==========
+-- ========== Smart Murderer Fling ==========
 task.spawn(function()
     while true do
         task.wait(0.5)
@@ -322,7 +324,11 @@ end)
 local FarmBtn = makeToggle(100, "جمع تلقائي (طيران)", "🌾", false, function(state)
     farmActive = state
     if state then
-        hasTeleportedToMap = false -- نسمح بالتيليبورت الأولي عند التشغيل
+        hasTeleportedToMap = false
+        coinsCollectedThisRound = 0
+        lastSeenCoinCount = -1
+        currentTarget = nil
+        waitingForCollect = false
     else
         local char = LocalPlayer.Character
         if char then
@@ -334,9 +340,6 @@ local FarmBtn = makeToggle(100, "جمع تلقائي (طيران)", "🌾", fals
             end
             for _, part in ipairs(char:GetDescendants()) do
                 if part:IsA("BasePart") then part.CanCollide = true end
-                if part:IsA("BasePart") then
-                    pcall(function() part.Velocity = Vector3.zero; part.RotVelocity = Vector3.zero end)
-                end
             end
         end
     end
@@ -344,10 +347,7 @@ end)
 
 local FlingMurdererBtn = makeToggle(166, "فلنك القاتل الذكي", "💥", false, function(state)
     flingMurdererActive = state
-    if state then
-        -- لما تفعله: نظف القائمة عشان يفلنك القاتل الحالي
-        flingedMurderers = {}
-    end
+    if state then flingedMurderers = {} end
 end)
 
 local AFKBtn = makeToggle(232, "مكافحة الطرد", "⏳", true, function(state)
@@ -411,29 +411,39 @@ local function getHRP()
     return char and char:FindFirstChild("HumanoidRootPart")
 end
 
-local function getNearestCoin()
-    local hrp = getHRP()
-    if not hrp then return nil end
-    local closest, dist = nil, math.huge
+local function getAllCoins()
+    local coins = {}
     for _, map in ipairs(workspace:GetChildren()) do
         if map:FindFirstChild("CoinContainer") then
             for _, coin in ipairs(map.CoinContainer:GetChildren()) do
                 if coin:IsA("BasePart") and coin:FindFirstChild("TouchInterest") then
-                    local d = (hrp.Position - coin.Position).Magnitude
-                    if d < dist then closest, dist = coin, d end
+                    table.insert(coins, coin)
                 end
             end
         end
     end
+    return coins
+end
+
+local function getNearestCoin()
+    local hrp = getHRP()
+    if not hrp then return nil end
+    local closest, dist = nil, math.huge
+    for _, coin in ipairs(getAllCoins()) do
+        local d = (hrp.Position - coin.Position).Magnitude
+        if d < dist then closest, dist = coin, d end
+    end
     return closest, dist
 end
 
--- ========== Auto Reset (with murderer fling at 50) ==========
+-- ========== Auto Reset ==========
 local function doAutoRespawn()
     if pendingRespawn then return end
     pendingRespawn = true
 
-    -- ريست طبيعي
+    waitingForCollect = false
+    currentTarget = nil
+
     local char = LocalPlayer.Character
     if char then
         local hum = char:FindFirstChildOfClass("Humanoid")
@@ -443,7 +453,6 @@ local function doAutoRespawn()
         end
     end
 
-    -- فلنك القاتل عند 50
     if flingMurdererActive then
         local murderer = getMurderer()
         if murderer and murderer.Character then
@@ -463,10 +472,12 @@ local function doAutoRespawn()
     end
     task.wait(3)
     pendingRespawn = false
-    hasTeleportedToMap = false -- نسمح بتيليبورت جديد للجولة الجديدة
+    hasTeleportedToMap = false
+    coinsCollectedThisRound = 0
+    lastSeenCoinCount = -1
 end
 
--- ========== Reset detection + Round tracking ==========
+-- ========== Reset detection ==========
 task.spawn(function()
     local remotes = ReplicatedStorage:WaitForChild("Remotes", 10)
     if not remotes then return end
@@ -482,21 +493,23 @@ task.spawn(function()
         end)
     end
 
-    -- Round start: نظف قائمة الفلنك
     local roundStart = gameplay:WaitForChild("RoundStart", 5)
     if roundStart then
         roundStart.OnClientEvent:Connect(function()
             flingedMurderers = {}
             hasTeleportedToMap = false
+            coinsCollectedThisRound = 0
+            lastSeenCoinCount = -1
         end)
     end
 end)
 
--- Polling backup for reset
+-- Polling backup (checks MM2 counter + our own counter)
 task.spawn(function()
     while true do
         task.wait(0.3)
         if farmActive and not pendingRespawn then
+            -- Check MM2 UI counter
             local mainGui = LocalPlayer.PlayerGui:FindFirstChild("MainGUI")
             if mainGui then
                 local gameGui = mainGui:FindFirstChild("Game")
@@ -515,11 +528,16 @@ task.spawn(function()
                     end
                 end
             end
+
+            -- Fallback: our own counter
+            if coinsCollectedThisRound >= 50 then
+                doAutoRespawn()
+            end
         end
     end
 end)
 
--- ========== FLY LOOP (teleport once, then fly above coins) ==========
+-- ========== MAIN FARM LOOP (STOP at coin, wait for disappear) ==========
 RunService.Heartbeat:Connect(function(dt)
     pcall(function()
         if not farmActive or pendingRespawn then return end
@@ -529,62 +547,100 @@ RunService.Heartbeat:Connect(function(dt)
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         if not hrp or not hum or hum.Health <= 0 then return end
 
-        -- إيقاف المشي
+        -- Track coins collected (by watching count decrease)
+        local allCoins = getAllCoins()
+        local currentCount = #allCoins
+        if lastSeenCoinCount >= 0 and currentCount < lastSeenCoinCount then
+            coinsCollectedThisRound = coinsCollectedThisRound + (lastSeenCoinCount - currentCount)
+        end
+        lastSeenCoinCount = currentCount
+
+        -- Stop walking
         hum.PlatformStand = true
         hum.WalkSpeed = 0
         hum.JumpPower = 0
-        hum.JumpHeight = 0
 
-        -- اختراق جدران
+        -- Noclip on non-HRP parts only (keeps HRP collidable so player doesn't fall through)
         for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") and part.CanCollide then
-                part.CanCollide = false
+            if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+                if part.CanCollide then part.CanCollide = false end
             end
         end
 
-        local coin = getNearestCoin()
+        -- ========== State: WAITING FOR COLLECT ==========
+        if waitingForCollect then
+            local target = currentTarget
+            if not target or not target.Parent or not target:IsDescendantOf(workspace) then
+                -- Coin collected!
+                waitingForCollect = false
+                currentTarget = nil
+                return
+            end
+
+            -- Keep player positioned ABOVE the coin (not underground)
+            hrp.CFrame = CFrame.new(target.Position + Vector3.new(0, COIN_STAND_HEIGHT, 0))
+            hrp.Velocity = Vector3.zero
+            hrp.RotVelocity = Vector3.zero
+
+            -- Fire touch from ALL character parts (feet, legs, torso, HRP)
+            for _, part in ipairs(char:GetChildren()) do
+                if part:IsA("BasePart") then
+                    pcall(function()
+                        firetouchinterest(part, target, 0)
+                        firetouchinterest(part, target, 1)
+                    end)
+                end
+            end
+
+            -- Timeout after 2 seconds (move to next coin)
+            if tick() - collectStartTime > 2 then
+                waitingForCollect = false
+                currentTarget = nil
+            end
+            return
+        end
+
+        -- ========== Find nearest coin ==========
+        local coin, dist = getNearestCoin()
         if not coin then return end
 
-        local myPos = hrp.Position
-        local dist = (coin.Position - myPos).Magnitude
-
-        -- 🗺️ تيليبورت مرة واحدة للماب (لو أول كوين بعيد)
+        -- 🗺️ Teleport ONCE to map (first coin only, if far)
         if not hasTeleportedToMap and dist > TELEPORT_THRESHOLD then
-            hrp.CFrame = CFrame.new(coin.Position + Vector3.new(0, 5, 0))
-            hasTeleportedToMap = true
-            return
-        end
-
-        -- 🎯 نجمع لو قريب (فوق الكوين)
-        if dist < 5 then
-            pcall(function()
-                firetouchinterest(hrp, coin, 0)
-                firetouchinterest(hrp, coin, 1)
-            end)
+            hrp.CFrame = CFrame.new(coin.Position + Vector3.new(0, COIN_STAND_HEIGHT, 0))
             hrp.Velocity = Vector3.zero
+            hasTeleportedToMap = true
+            -- Now trigger collection next frame
+            currentTarget = coin
+            waitingForCollect = true
+            collectStartTime = tick()
             return
         end
 
-        -- ✈️ طيران نحو الكوين (نستهدف نقطة فوق الكوين بـ 2)
-        local targetPos = coin.Position + Vector3.new(0, COIN_OFFSET_Y, 0)
-        local delta = targetPos - myPos
+        -- ========== Close enough? Start collection ==========
+        if dist < 5 then
+            currentTarget = coin
+            waitingForCollect = true
+            collectStartTime = tick()
+            hrp.CFrame = CFrame.new(coin.Position + Vector3.new(0, COIN_STAND_HEIGHT, 0))
+            return
+        end
+
+        -- ========== FLY towards coin ==========
+        local targetPos = coin.Position + Vector3.new(0, COIN_STAND_HEIGHT, 0)
+        local delta = targetPos - hrp.Position
         local flyDist = delta.Magnitude
 
-        local speed
-        if flyDist < 20 then speed = FLY_SPEED_NEAR
-        elseif flyDist < 100 then speed = FLY_SPEED_MID
-        else speed = FLY_SPEED_FAR end
-
-        local step = math.min(speed * dt, flyDist - 1)
-        local newPos = myPos + delta.Unit * step
-
-        hrp.CFrame = CFrame.new(newPos, targetPos)
-        hrp.Velocity = Vector3.zero
-        hrp.RotVelocity = Vector3.zero
+        local step = math.min(FLY_SPEED * dt, flyDist - 2)
+        if step > 0 then
+            local newPos = hrp.Position + delta.Unit * step
+            hrp.CFrame = CFrame.new(newPos, targetPos)
+            hrp.Velocity = Vector3.zero
+            hrp.RotVelocity = Vector3.zero
+        end
     end)
 end)
 
--- سرعة المشي لما الفارم مطفي
+-- ========== Speed when farm off ==========
 RunService.Heartbeat:Connect(function()
     pcall(function()
         if not farmActive then
@@ -599,42 +655,32 @@ RunService.Heartbeat:Connect(function()
     end)
 end)
 
--- Coin info
+-- ========== Coin info display ==========
 local function updateCoinInfo()
-    local count = 0
-    local hrp = getHRP()
-    if hrp then
-        for _, map in ipairs(workspace:GetChildren()) do
-            if map:FindFirstChild("CoinContainer") then
-                for _, coin in ipairs(map.CoinContainer:GetChildren()) do
-                    if coin:IsA("BasePart") and coin:FindFirstChild("TouchInterest") then
-                        count = count + 1
-                    end
-                end
-            end
-        end
-    end
-    local bagTxt = "0"
+    local count = #getAllCoins()
+    local bagTxt = tostring(coinsCollectedThisRound)
     local mainGui = LocalPlayer.PlayerGui:FindFirstChild("MainGUI")
     if mainGui and mainGui:FindFirstChild("Game") and mainGui.Game:FindFirstChild("CoinBags") then
         for _, bag in ipairs(mainGui.Game.CoinBags:GetDescendants()) do
             if bag:IsA("TextLabel") and bag.Name == "Coins" then
                 local cur = bag.Text:match("(%d+)")
-                if cur then bagTxt = cur end
+                if cur and tonumber(cur) > 0 then bagTxt = cur end
             end
         end
     end
-    CoinInfo.Text = "🪙 " .. bagTxt .. " / 50  •  الخريطة: " .. count
+    CoinInfo.Text = "🪙 " .. bagTxt .. " / 50  •  بالخريطة: " .. count
 end
 
 RunService.Heartbeat:Connect(function()
     pcall(updateCoinInfo)
 end)
 
--- عند الريسبون
+-- ========== Respawn ==========
 LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(0.5)
     hasTeleportedToMap = false
+    waitingForCollect = false
+    currentTarget = nil
     if not farmActive then
         applySpeed()
     end
