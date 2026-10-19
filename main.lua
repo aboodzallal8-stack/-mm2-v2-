@@ -1,8 +1,8 @@
 --[[
-    عمو تشريب Hub - Mobile v17 FINAL
-    - REAL FLY (hovering) at speed 27
-    - Smart reset (verified 50 + in round)
-    - Instant murderer fling on entry + at reset
+    عمو تشريب Hub - Mobile v18 FINAL
+    - REAL FLY via BodyPosition + BodyGyro + Physics state
+    - Noclip on ALL parts (including HRP)
+    - Continuous fling every 1s until dead
 --]]
 
 local Players = game:GetService("Players")
@@ -14,9 +14,8 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 
 -- ========== Config ==========
-local FLY_SPEED = 27  -- سرعة الطيران (آمنة)
-local HOVER_HEIGHT = 3  -- ارتفاع فوق الكوين
-local COLLECT_RADIUS = 4  -- مسافة الجمع
+local FLY_SPEED = 27
+local HOVER_HEIGHT = 2
 
 -- ========== States ==========
 local farmActive = false
@@ -24,11 +23,7 @@ local flingActive = false
 local antiAFKActive = true
 local pendingRespawn = false
 local lastResetTime = 0
-local flingedThisRound = {}
 local ignoreCoins = {}
-local currentTarget = nil
-local waitingCollect = false
-local collectStart = 0
 
 -- ========== Anti-AFK ==========
 task.spawn(function()
@@ -72,38 +67,49 @@ local function getMurderer()
             end
         end
     end
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        local role = player:GetAttribute("Role") or player:GetAttribute("role")
+        if role and tostring(role):lower():find("murder") then return player end
+    end
     return nil
 end
 
--- ========== Fling (reliable) ==========
+-- ========== Fling (powerful + reliable) ==========
 local function flingMurderer(murderer)
     if not murderer then return end
     task.spawn(function()
-        for attempt = 1, 25 do
+        for attempt = 1, 20 do
             local char = murderer.Character
             if not char then break end
             local hrp = char:FindFirstChild("HumanoidRootPart")
             local hum = char:FindFirstChildOfClass("Humanoid")
             if not hrp or not hum or hum.Health <= 0 then break end
 
+            -- BodyVelocity (fly up fast)
             pcall(function()
                 local bv = hrp:FindFirstChild("FlingBV") or Instance.new("BodyVelocity", hrp)
                 bv.Name = "FlingBV"
                 bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-                bv.Velocity = Vector3.new(math.random(-4000, 4000), 90000, math.random(-4000, 4000))
+                bv.Velocity = Vector3.new(math.random(-5000, 5000), 120000, math.random(-5000, 5000))
             end)
+
+            -- BodyAngularVelocity (spin)
             pcall(function()
                 local bav = hrp:FindFirstChild("FlingBAV") or Instance.new("BodyAngularVelocity", hrp)
                 bav.Name = "FlingBAV"
                 bav.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
                 bav.AngularVelocity = Vector3.new(999999, 999999, 999999)
             end)
+
+            -- Direct CFrame + velocity
             pcall(function()
-                hrp.CFrame = CFrame.new(math.random(-1500, 1500), 18000 + attempt * 1200, math.random(-1500, 1500))
+                hrp.CFrame = CFrame.new(math.random(-1500, 1500), 20000 + (attempt * 1500), math.random(-1500, 1500))
+                hrp.Velocity = Vector3.new(math.random(-10000, 10000), 120000, math.random(-10000, 10000))
                 hum.PlatformStand = true
             end)
 
-            task.wait(0.1)
+            task.wait(0.08)
         end
         pcall(function()
             local h = murderer.Character and murderer.Character:FindFirstChildOfClass("Humanoid")
@@ -112,21 +118,17 @@ local function flingMurderer(murderer)
     end)
 end
 
--- ========== INSTANT FLING LOOP (0.2s) ==========
+-- ========== CONTINUOUS FLING LOOP (every 1s - UNTIL DEAD) ==========
 task.spawn(function()
     while true do
-        task.wait(0.2)
+        task.wait(1)
         if flingActive and not pendingRespawn then
             local murderer = getMurderer()
             if murderer and murderer.Character then
                 local hum = murderer.Character:FindFirstChildOfClass("Humanoid")
                 if hum and hum.Health > 0 then
-                    -- First time only, then every 3 seconds retry
-                    if not flingedThisRound[murderer.UserId] then
-                        flingedThisRound[murderer.UserId] = true
-                        print("[FLING] Murderer found: " .. murderer.Name)
-                        flingMurderer(murderer)
-                    end
+                    print("[FLING] Trying to kill: " .. murderer.Name .. " (HP: " .. hum.Health .. ")")
+                    flingMurderer(murderer)  -- يحاول كل ثانية
                 end
             end
         end
@@ -307,10 +309,18 @@ local FarmBtn = makeToggle(60, "طيران + جمع", "✈️", false, function(
     if not state then
         local char = LocalPlayer.Character
         if char then
+            -- تنظيف
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local bp = hrp:FindFirstChild("FlyPos"); if bp then bp:Destroy() end
+                local bg = hrp:FindFirstChild("FlyGyro"); if bg then bg:Destroy() end
+            end
             local hum = char:FindFirstChildOfClass("Humanoid")
             if hum then
                 hum.PlatformStand = false
                 hum.WalkSpeed = 16
+                hum.JumpPower = 50
+                hum.AutoRotate = true
             end
             for _, part in ipairs(char:GetDescendants()) do
                 if part:IsA("BasePart") then part.CanCollide = true end
@@ -328,7 +338,6 @@ local FlingBtn = makeToggle(130, "فلنك القاتل", "💥", false, functio
             if m and m.Character then
                 local h = m.Character:FindFirstChildOfClass("Humanoid")
                 if h and h.Health > 0 then
-                    flingedThisRound[m.UserId] = true
                     flingMurderer(m)
                     print("[INSTANT] Flinged: " .. m.Name)
                 end
@@ -459,10 +468,16 @@ local function doAutoRespawn()
     if tick() - lastResetTime < 5 then return end
     pendingRespawn = true
     lastResetTime = tick()
-    print("[RESET] Triggered at 50 coins")
+    print("[RESET] Triggered")
 
+    -- تنظيف الطيران
     local char = LocalPlayer.Character
     if char then
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            local bp = hrp:FindFirstChild("FlyPos"); if bp then bp:Destroy() end
+            local bg = hrp:FindFirstChild("FlyGyro"); if bg then bg:Destroy() end
+        end
         local hum = char:FindFirstChildOfClass("Humanoid")
         if hum then
             hum.PlatformStand = false
@@ -473,7 +488,7 @@ local function doAutoRespawn()
         end
     end
 
-    -- Fling murderer first
+    -- Fling murderer قبل الريست
     if flingActive then
         local m = getMurderer()
         if m and m.Character then
@@ -485,7 +500,7 @@ local function doAutoRespawn()
         end
     end
 
-    -- Reset ourselves
+    -- الريست
     if char then
         local hum = char:FindFirstChildOfClass("Humanoid")
         if hum and hum.Health > 0 then
@@ -494,10 +509,7 @@ local function doAutoRespawn()
     end
     task.wait(3)
     pendingRespawn = false
-    flingedThisRound = {}
     ignoreCoins = {}
-    currentTarget = nil
-    waitingCollect = false
 end
 
 -- Reset verification loop
@@ -515,7 +527,7 @@ task.spawn(function()
     end
 end)
 
--- ========== FLY FARM LOOP (v17: REAL FLY at 27) ==========
+-- ========== FLY LOOP (v18: REAL FLY with BodyPosition) ==========
 RunService.Heartbeat:Connect(function(dt)
     pcall(function()
         if not farmActive or pendingRespawn then return end
@@ -525,75 +537,70 @@ RunService.Heartbeat:Connect(function(dt)
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         if not hrp or not hum or hum.Health <= 0 then return end
 
-        -- ========== STATE: WAITING FOR COLLECT ==========
-        if waitingCollect then
-            local target = currentTarget
-            if not target or not target.Parent then
-                waitingCollect = false
-                currentTarget = nil
-                return
-            end
-
-            -- PlatformStand OFF so touch works
-            hum.PlatformStand = false
-            hum.WalkSpeed = 0
-
-            -- Position just above coin (1.5 studs - touching it)
-            hrp.CFrame = CFrame.new(target.Position + Vector3.new(0, 1.5, 0))
-            hrp.Velocity = Vector3.zero
-
-            -- Fire touch from ALL body parts
-            for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") then
-                    pcall(function()
-                        firetouchinterest(part, target, 0)
-                        firetouchinterest(part, target, 1)
-                    end)
-                end
-            end
-
-            -- Timeout after 1 sec
-            if tick() - collectStart > 1 then
-                ignoreCoins[target] = true
-                waitingCollect = false
-                currentTarget = nil
-            end
-            return
-        end
-
-        -- ========== FLYING MODE ==========
+        -- ========== FORCE FLY MODE ==========
+        -- تعطيل Humanoid تماماً
         hum.PlatformStand = true
         hum.WalkSpeed = 0
         hum.JumpPower = 0
+        hum.JumpHeight = 0
+        hum.AutoRotate = false
+        pcall(function() hum:ChangeState(Enum.HumanoidStateType.Physics) end)
 
-        -- Noclip (fly through walls)
+        -- Noclip على كل الأجزاء (حتى HRP)
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") then
                 if part.CanCollide then part.CanCollide = false end
             end
         end
 
-        -- Find coin
+        -- إنشاء BodyPosition لو ما موجود
+        local bodyPos = hrp:FindFirstChild("FlyPos")
+        if not bodyPos then
+            bodyPos = Instance.new("BodyPosition")
+            bodyPos.Name = "FlyPos"
+            bodyPos.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+            bodyPos.P = 100000
+            bodyPos.D = 1000
+            bodyPos.Parent = hrp
+        end
+
+        -- إنشاء BodyGyro لو ما موجود
+        local bodyGyro = hrp:FindFirstChild("FlyGyro")
+        if not bodyGyro then
+            bodyGyro = Instance.new("BodyGyro")
+            bodyGyro.Name = "FlyGyro"
+            bodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+            bodyGyro.P = 10000
+            bodyGyro.D = 500
+            bodyGyro.Parent = hrp
+        end
+
+        -- البحث عن كوين
         local coin, dist = getNearestCoin()
         if not coin then return end
 
-        -- Hover position: ABOVE coin
+        -- وضع الهدف فوق الكوين
         local targetPos = coin.Position + Vector3.new(0, HOVER_HEIGHT, 0)
-        local delta = targetPos - hrp.Position
-        local flyDist = delta.Magnitude
+        bodyPos.Position = targetPos
+        bodyGyro.CFrame = CFrame.new(hrp.Position, targetPos)
 
-        -- Close enough? Start collect
-        if dist < COLLECT_RADIUS then
-            currentTarget = coin
-            waitingCollect = true
-            collectStart = tick()
-            return
-        end
+        -- جمع لو قريب
+        if dist < 5 then
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    pcall(function()
+                        firetouchinterest(part, coin, 0)
+                        firetouchinterest(part, coin, 1)
+                    end)
+                end
+            end
 
-        -- Fly towards target (CFrame per frame - safe speed 27)
-        local step = math.min(FLY_SPEED * dt, flyDist)
-        if step > 0 then
-            hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * step)
+            -- لو نفس الكوين لأكثر من 1.5 ثانية، تجاهله
+            if not ignoreCoins[coin] then
+                ignoreCoins[coin] = tick()
+            elseif tick() - ignoreCoins[coin] > 1.5 then
+                ignoreCoins[coin] = true -- تجاهل دائم
+            end
         end
     end)
 end)
@@ -609,11 +616,9 @@ RunService.Heartbeat:Connect(function()
     pcall(updateCoinInfo)
 end)
 
--- Respawn
+-- Respawn handler
 LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(0.5)
-    currentTarget = nil
-    waitingCollect = false
     if not farmActive then
         local hum = char:FindFirstChildOfClass("Humanoid")
         if hum then hum.WalkSpeed = 16 end
